@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.Sovereign" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+        <item name="colorPrimary">#0e0e0e</item>
+        <item name="colorPrimaryVariant">#3a3a3a</item>
+        <item name="colorOnPrimary">#f7f6f2</item>
+        <item name="android:statusBarColor">#0e0e0e</item>
+        <item name="android:navigationBarColor">#f7f6f2</item>
+        <item name="android:windowBackground">#f7f6f2</item>
+    </style>
+</resources>

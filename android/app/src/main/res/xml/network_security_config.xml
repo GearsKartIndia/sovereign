@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Sovereign runs entirely from local assets.
+  No network connections are made except to load Google Fonts (can be removed
+  by bundling fonts in assets/www/ for a fully offline build).
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

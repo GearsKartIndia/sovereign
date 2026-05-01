@@ -1,0 +1,20 @@
+{
+  "name": "Sovereign by Copps",
+  "short_name": "Sovereign",
+  "description": "Free Password Store — Truly local. No servers, no accounts.",
+  "start_url": "/index.html",
+  "display": "standalone",
+  "background_color": "#f7f6f2",
+  "theme_color": "#0e0e0e",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512'><rect width='512' height='512' rx='112' fill='%230e0e0e'/><text x='256' y='340' font-size='280' text-anchor='middle'>🔐</text></svg>",
+      "sizes": "512x512",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ],
+  "categories": ["productivity", "utilities"],
+  "prefer_related_applications": false
+}

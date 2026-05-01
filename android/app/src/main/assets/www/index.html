@@ -1,0 +1,1024 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#0e0e0e">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Sovereign by Copps">
+<meta name="description" content="Free Password Store — Truly local. No servers, no accounts.">
+<link rel="manifest" href="manifest.json">
+<title>Sovereign by Copps</title>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=DM+Mono:wght@400;500&family=Geist:wght@300;400;500;600&display=swap" rel="stylesheet">
+<style>
+/* ── Reset & Base ── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+:root {
+  --ink:       #0e0e0e;
+  --ink2:      #3a3a3a;
+  --ink3:      #888;
+  --ink4:      #bbb;
+  --paper:     #f7f6f2;
+  --paper2:    #eeecea;
+  --paper3:    #e5e3df;
+  --border:    rgba(0,0,0,0.10);
+  --border2:   rgba(0,0,0,0.16);
+  --gold:      #b8935a;
+  --gold-lt:   #d4aa72;
+  --red:       #c0392b;
+  --green:     #1e7e4a;
+  --mono:      'DM Mono', monospace;
+  --serif:     'Instrument Serif', Georgia, serif;
+  --sans:      'Geist', system-ui, sans-serif;
+  --r:         10px;
+  --r-lg:      16px;
+  --shadow:    0 2px 16px rgba(0,0,0,0.08);
+  --shadow-md: 0 4px 32px rgba(0,0,0,0.13);
+}
+html { font-size: 16px; }
+body {
+  font-family: var(--sans);
+  background: var(--paper);
+  color: var(--ink);
+  min-height: 100vh;
+  min-height: -webkit-fill-available;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ── Screens ── */
+.screen { display: none; min-height: 100vh; }
+.screen.active { display: flex; flex-direction: column; }
+
+/* ── Setup / Lock screen ── */
+#screen-setup, #screen-lock {
+  align-items: center;
+  justify-content: center;
+  padding: 2rem 1.25rem;
+  background: var(--paper);
+}
+
+.lock-card {
+  width: 100%;
+  max-width: 380px;
+  background: #fff;
+  border: 1px solid var(--border2);
+  border-radius: 20px;
+  padding: 2.5rem 2rem;
+  box-shadow: var(--shadow-md);
+}
+
+.lock-logo {
+  font-family: var(--serif);
+  font-size: 2.25rem;
+  letter-spacing: -0.01em;
+  margin-bottom: 0.25rem;
+  color: var(--ink);
+}
+.lock-logo span { color: var(--gold); font-style: italic; }
+
+.lock-tagline {
+  font-size: 0.8125rem;
+  color: var(--ink3);
+  margin-bottom: 2rem;
+  font-weight: 300;
+  letter-spacing: 0.02em;
+}
+
+.lock-divider {
+  display: flex; align-items: center; gap: 0.75rem;
+  margin: 1.25rem 0; color: var(--ink4); font-size: 0.75rem;
+}
+.lock-divider::before, .lock-divider::after {
+  content:''; flex:1; height:1px; background: var(--border2);
+}
+
+/* ── Field ── */
+.field { margin-bottom: 1rem; }
+.field-label {
+  display: block; font-size: 0.75rem; font-weight: 500;
+  color: var(--ink3); letter-spacing: 0.07em; text-transform: uppercase;
+  margin-bottom: 0.4rem;
+}
+.input-wrap { position: relative; }
+input[type=text], input[type=password], textarea {
+  width: 100%;
+  background: var(--paper);
+  border: 1px solid var(--border2);
+  border-radius: var(--r);
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: 0.9375rem;
+  padding: 0.7rem 0.9rem;
+  outline: none;
+  transition: border-color 0.18s, box-shadow 0.18s;
+  -webkit-appearance: none;
+}
+input[type=password] { font-family: var(--mono); letter-spacing: 0.1em; }
+input:focus, textarea:focus {
+  border-color: var(--gold);
+  box-shadow: 0 0 0 3px rgba(184,147,90,0.15);
+  background: #fff;
+}
+.input-eye {
+  position: absolute; right: 0.7rem; top: 50%; transform: translateY(-50%);
+  border: none; background: none; cursor: pointer; color: var(--ink4);
+  font-size: 1rem; padding: 4px; transition: color 0.15s;
+}
+.input-eye:hover { color: var(--ink2); }
+input.has-eye { padding-right: 2.5rem; }
+
+/* ── Buttons ── */
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 0.5rem;
+  border: none; cursor: pointer; font-family: var(--sans);
+  border-radius: var(--r); font-weight: 500; transition: all 0.15s;
+  -webkit-tap-highlight-color: transparent;
+}
+.btn-primary {
+  background: var(--ink); color: #fff;
+  padding: 0.75rem 1.5rem; font-size: 0.9375rem; width: 100%;
+}
+.btn-primary:hover { background: var(--ink2); }
+.btn-primary:active { transform: scale(0.98); }
+.btn-gold {
+  background: var(--gold); color: #fff;
+  padding: 0.75rem 1.5rem; font-size: 0.9375rem; width: 100%;
+}
+.btn-gold:hover { background: var(--gold-lt); }
+.btn-ghost {
+  background: transparent; border: 1px solid var(--border2);
+  color: var(--ink2); padding: 0.625rem 1rem; font-size: 0.875rem;
+}
+.btn-ghost:hover { background: var(--paper2); border-color: var(--border2); }
+.btn-sm { padding: 0.45rem 0.9rem; font-size: 0.8125rem; border-radius: 8px; }
+.btn-icon {
+  background: var(--paper2); border: 1px solid var(--border);
+  color: var(--ink3); width: 34px; height: 34px;
+  padding: 0; font-size: 0.9rem; border-radius: 8px; flex-shrink: 0;
+}
+.btn-icon:hover { background: var(--paper3); color: var(--ink); }
+.btn-danger { color: var(--red); }
+.btn-danger:hover { background: #fdf0f0 !important; border-color: #e8b4b4 !important; }
+.biometric-btn {
+  width: 100%; padding: 0.75rem; font-size: 0.9375rem;
+  background: var(--paper2); border: 1px solid var(--border2);
+  border-radius: var(--r); color: var(--ink2); cursor: pointer;
+  font-family: var(--sans); font-weight: 500;
+  display: flex; align-items: center; justify-content: center; gap: 0.6rem;
+  transition: all 0.15s;
+}
+.biometric-btn:hover { background: var(--paper3); }
+.biometric-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+/* ── App shell ── */
+#screen-app { background: var(--paper); }
+.app-header {
+  background: #fff;
+  border-bottom: 1px solid var(--border);
+  padding: 1rem 1.25rem;
+  display: flex; align-items: center; gap: 0.75rem;
+  position: sticky; top: 0; z-index: 10;
+}
+.app-logo { font-family: var(--serif); font-size: 1.375rem; flex: 1; }
+.app-logo span { color: var(--gold); font-style: italic; }
+
+.search-bar {
+  padding: 0.875rem 1.25rem 0;
+  background: var(--paper);
+}
+.search-wrap { position: relative; }
+.search-wrap input { padding-left: 2.25rem; font-size: 0.875rem; background: #fff; }
+.search-icon {
+  position: absolute; left: 0.75rem; top: 50%; transform: translateY(-50%);
+  color: var(--ink4); font-size: 0.875rem; pointer-events: none;
+}
+
+/* ── Entry list ── */
+.entries-wrap { padding: 0.875rem 1.25rem; flex: 1; }
+
+.entries-header {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 0.625rem;
+}
+.entries-count { font-size: 0.75rem; color: var(--ink3); font-weight: 400; }
+
+.entry-list { display: flex; flex-direction: column; gap: 6px; }
+
+.entry-card {
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  overflow: hidden;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.entry-card:hover { border-color: var(--border2); box-shadow: 0 2px 8px rgba(0,0,0,0.06); }
+
+.entry-header {
+  display: flex; align-items: center; gap: 0.75rem;
+  padding: 0.875rem 1rem;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.entry-name {
+  flex: 1; font-size: 0.9375rem; font-weight: 500;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.entry-badge {
+  font-size: 0.6875rem; padding: 2px 8px; border-radius: 20px;
+  font-weight: 500; letter-spacing: 0.04em; flex-shrink: 0;
+  background: var(--paper2); color: var(--ink3);
+}
+.entry-chevron {
+  color: var(--ink4); font-size: 0.75rem; transition: transform 0.2s; flex-shrink: 0;
+}
+.entry-card.open .entry-chevron { transform: rotate(180deg); }
+
+.entry-body {
+  display: none; border-top: 1px solid var(--border);
+  padding: 0.875rem 1rem;
+}
+.entry-card.open .entry-body { display: block; }
+
+.entry-value-wrap { position: relative; }
+.entry-value {
+  font-family: var(--mono); font-size: 0.8125rem;
+  color: var(--ink2); line-height: 1.6;
+  background: var(--paper); border: 1px solid var(--border);
+  border-radius: 8px; padding: 0.625rem 2.75rem 0.625rem 0.75rem;
+  word-break: break-all; white-space: pre-wrap; min-height: 2.5rem;
+  transition: filter 0.2s;
+}
+.entry-value.masked { filter: blur(5px); user-select: none; }
+.entry-reveal {
+  position: absolute; right: 0.5rem; top: 0.5rem;
+  background: none; border: none; cursor: pointer;
+  color: var(--ink4); font-size: 0.85rem; padding: 4px;
+  transition: color 0.15s; border-radius: 4px;
+}
+.entry-reveal:hover { color: var(--ink2); background: var(--paper3); }
+
+.entry-actions {
+  display: flex; gap: 0.5rem; margin-top: 0.75rem; justify-content: flex-end;
+}
+
+/* ── Empty state ── */
+.empty-state {
+  text-align: center; padding: 3rem 1.5rem;
+  color: var(--ink4); font-size: 0.875rem;
+}
+.empty-icon { font-size: 2.5rem; margin-bottom: 0.75rem; }
+.empty-title { color: var(--ink3); font-weight: 500; margin-bottom: 0.375rem; }
+
+/* ── FAB ── */
+.fab {
+  position: fixed; bottom: calc(1.5rem + env(safe-area-inset-bottom));
+  right: 1.5rem;
+  width: 54px; height: 54px;
+  background: var(--ink); color: #fff;
+  border: none; border-radius: 50%; font-size: 1.5rem;
+  cursor: pointer; box-shadow: 0 4px 20px rgba(0,0,0,0.22);
+  display: flex; align-items: center; justify-content: center;
+  transition: all 0.18s; z-index: 20;
+  -webkit-tap-highlight-color: transparent;
+}
+.fab:hover { background: var(--gold); transform: scale(1.06); }
+.fab:active { transform: scale(0.96); }
+
+/* ── Modal ── */
+.modal-overlay {
+  position: fixed; inset: 0;
+  background: rgba(0,0,0,0.45); backdrop-filter: blur(4px);
+  display: flex; align-items: flex-end; justify-content: center;
+  z-index: 50; opacity: 0; pointer-events: none;
+  transition: opacity 0.2s;
+}
+.modal-overlay.open { opacity: 1; pointer-events: all; }
+@media (min-width: 520px) {
+  .modal-overlay { align-items: center; }
+  .modal { border-radius: 20px !important; max-height: 85vh; }
+}
+.modal {
+  background: #fff; width: 100%; max-width: 480px;
+  border-radius: 20px 20px 0 0;
+  max-height: 92vh; overflow-y: auto;
+  transform: translateY(24px); transition: transform 0.25s;
+  box-shadow: 0 -4px 32px rgba(0,0,0,0.15);
+}
+.modal-overlay.open .modal { transform: translateY(0); }
+.modal-handle {
+  width: 36px; height: 4px; background: var(--paper3);
+  border-radius: 2px; margin: 0.875rem auto 0;
+}
+.modal-header {
+  padding: 1rem 1.25rem 0.875rem;
+  border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; justify-content: space-between;
+}
+.modal-title { font-size: 1rem; font-weight: 600; }
+.modal-close {
+  background: var(--paper2); border: none; cursor: pointer;
+  width: 28px; height: 28px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 0.875rem; color: var(--ink3); transition: all 0.15s;
+}
+.modal-close:hover { background: var(--paper3); color: var(--ink); }
+.modal-body { padding: 1.25rem; }
+.modal-footer {
+  padding: 0.875rem 1.25rem calc(0.875rem + env(safe-area-inset-bottom));
+  border-top: 1px solid var(--border);
+  display: flex; gap: 0.625rem;
+}
+
+/* ── Toggle ── */
+.toggle-row {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 1rem;
+}
+.toggle-label { font-size: 0.875rem; color: var(--ink2); }
+.toggle {
+  position: relative; width: 44px; height: 24px;
+  -webkit-tap-highlight-color: transparent;
+}
+.toggle input { opacity: 0; width: 0; height: 0; }
+.toggle-track {
+  position: absolute; inset: 0; border-radius: 12px;
+  background: var(--paper3); cursor: pointer; transition: background 0.2s;
+}
+.toggle input:checked + .toggle-track { background: var(--ink); }
+.toggle-track::after {
+  content:''; position: absolute;
+  width: 18px; height: 18px; border-radius: 50%;
+  background: #fff; top: 3px; left: 3px;
+  transition: transform 0.2s; box-shadow: 0 1px 4px rgba(0,0,0,0.2);
+}
+.toggle input:checked + .toggle-track::after { transform: translateX(20px); }
+
+/* ── Toast ── */
+.toast {
+  position: fixed; bottom: calc(5.5rem + env(safe-area-inset-bottom));
+  left: 50%; transform: translateX(-50%) translateY(8px);
+  background: var(--ink); color: #fff;
+  font-size: 0.8125rem; font-weight: 500;
+  padding: 0.625rem 1.125rem; border-radius: 20px;
+  pointer-events: none; opacity: 0; transition: all 0.22s;
+  white-space: nowrap; z-index: 100;
+}
+.toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+.toast.error { background: var(--red); }
+
+/* ── Security badge ── */
+.security-note {
+  display: flex; align-items: flex-start; gap: 0.5rem;
+  background: var(--paper2); border-radius: var(--r);
+  padding: 0.75rem; font-size: 0.8rem; color: var(--ink3);
+  margin-top: 1rem; line-height: 1.5;
+}
+
+/* ── Util ── */
+.mt { margin-top: 0.75rem; }
+.text-sm { font-size: 0.8125rem; color: var(--ink3); }
+.text-center { text-align: center; }
+.danger-zone { border-top: 1px solid var(--border); padding-top: 0.75rem; margin-top: 0.75rem; }
+</style>
+</head>
+<body>
+
+<!-- ═══ SETUP SCREEN (first launch) ═══ -->
+<div id="screen-setup" class="screen active">
+  <div class="lock-card" style="margin:auto">
+    <div class="lock-logo">Sovereign <span>by Copps</span></div>
+    <div class="lock-tagline">Free Password Store — Truly local.</div>
+
+    <div class="field">
+      <label class="field-label">Choose a master password</label>
+      <div class="input-wrap">
+        <input type="password" id="setup-pw" class="has-eye" placeholder="At least 10 characters" autocomplete="new-password">
+        <button class="input-eye" onclick="toggleEye('setup-pw',this)">👁</button>
+      </div>
+    </div>
+    <div class="field">
+      <label class="field-label">Confirm password</label>
+      <div class="input-wrap">
+        <input type="password" id="setup-pw2" class="has-eye" placeholder="Repeat password" autocomplete="new-password">
+        <button class="input-eye" onclick="toggleEye('setup-pw2',this)">👁</button>
+      </div>
+    </div>
+
+    <div id="setup-strength" style="margin:-0.25rem 0 0.875rem;height:20px"></div>
+
+    <button class="btn btn-primary" onclick="setupVault()">Create Vault →</button>
+
+    <div class="security-note">
+      🔐 Your vault is encrypted with AES-256-GCM. The master password never leaves this device.
+    </div>
+  </div>
+</div>
+
+<!-- ═══ LOCK SCREEN ═══ -->
+<div id="screen-lock" class="screen">
+  <div class="lock-card" style="margin:auto">
+    <div class="lock-logo">Sovereign <span>by Copps</span></div>
+    <div class="lock-tagline">Unlock to access your secrets</div>
+
+    <div class="field">
+      <label class="field-label">Master password</label>
+      <div class="input-wrap">
+        <input type="password" id="lock-pw" class="has-eye" placeholder="Enter master password" autocomplete="current-password">
+        <button class="input-eye" onclick="toggleEye('lock-pw',this)">👁</button>
+      </div>
+    </div>
+
+    <button class="btn btn-primary" onclick="unlock()">Unlock →</button>
+
+    <div class="lock-divider">or</div>
+
+    <button class="biometric-btn" id="bio-btn" onclick="unlockBiometric()" disabled>
+      <span>🪪</span> Use passkey / biometric
+    </button>
+
+    <p class="text-sm text-center mt" id="bio-hint" style="display:none"></p>
+
+    <div class="security-note mt">
+      🔐 All data is encrypted on this device. Nothing is sent to any server.
+    </div>
+  </div>
+</div>
+
+<!-- ═══ APP SCREEN ═══ -->
+<div id="screen-app" class="screen">
+  <header class="app-header">
+    <div style="flex:1"><div class="app-logo">Sovereign <span>by Copps</span></div><div style="font-size:0.6875rem;color:var(--ink4);font-weight:300;letter-spacing:0.04em;margin-top:1px">Free Password Store — Truly local</div></div>
+    <button class="btn btn-icon" onclick="openSettings()" title="Settings">⚙️</button>
+    <button class="btn btn-icon" onclick="lockApp()" title="Lock vault">🔒</button>
+  </header>
+
+  <div class="search-bar">
+    <div class="search-wrap">
+      <span class="search-icon">🔍</span>
+      <input type="text" id="search-input" placeholder="Search entries…" oninput="renderEntries()">
+    </div>
+  </div>
+
+  <div class="entries-wrap">
+    <div class="entries-header">
+      <span class="entries-count" id="entries-count"></span>
+    </div>
+    <div class="entry-list" id="entry-list"></div>
+  </div>
+
+  <button class="fab" onclick="openAddModal()" title="Add entry">+</button>
+</div>
+
+<!-- ═══ ADD / EDIT MODAL ═══ -->
+<div class="modal-overlay" id="entry-modal">
+  <div class="modal">
+    <div class="modal-handle"></div>
+    <div class="modal-header">
+      <span class="modal-title" id="entry-modal-title">New Entry</span>
+      <button class="modal-close" onclick="closeModal('entry-modal')">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="field">
+        <label class="field-label">Name</label>
+        <input type="text" id="e-name" placeholder="e.g. Gmail, WiFi, AWS Key">
+      </div>
+      <div class="toggle-row">
+        <span class="toggle-label">Multi-line value</span>
+        <label class="toggle">
+          <input type="checkbox" id="e-multiline" onchange="toggleValueField()">
+          <span class="toggle-track"></span>
+        </label>
+      </div>
+      <div class="field">
+        <label class="field-label">Value</label>
+        <input type="text" id="e-value-single" placeholder="username:password or any secret">
+        <textarea id="e-value-multi" rows="5" placeholder="Multi-line content…" style="display:none;resize:vertical;font-family:var(--mono);font-size:0.875rem"></textarea>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeModal('entry-modal')" style="flex:1">Cancel</button>
+      <button class="btn btn-primary" onclick="saveEntry()" style="flex:2">Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ SETTINGS MODAL ═══ -->
+<div class="modal-overlay" id="settings-modal">
+  <div class="modal">
+    <div class="modal-handle"></div>
+    <div class="modal-header">
+      <span class="modal-title">Settings</span>
+      <button class="modal-close" onclick="closeModal('settings-modal')">✕</button>
+    </div>
+    <div class="modal-body">
+      <p class="text-sm" style="margin-bottom:1rem">All data is stored encrypted on this device using AES-256-GCM.</p>
+
+      <button class="btn btn-ghost" style="width:100%;margin-bottom:0.625rem" onclick="registerBiometric()">
+        🪪 Register biometric / passkey
+      </button>
+      <button class="btn btn-ghost" style="width:100%;margin-bottom:0.625rem" onclick="exportVault()">
+        📤 Export encrypted backup
+      </button>
+      <button class="btn btn-ghost" style="width:100%;margin-bottom:0.625rem" onclick="document.getElementById('import-file').click()">
+        📥 Import backup
+      </button>
+      <input type="file" id="import-file" accept=".sovereignbak" style="display:none" onchange="importVault(this)">
+
+      <div class="danger-zone">
+        <p class="text-sm" style="margin-bottom:0.625rem;color:var(--red)">Danger zone</p>
+        <button class="btn btn-ghost btn-danger" style="width:100%" onclick="resetVault()">
+          🗑 Wipe vault & reset
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ TOAST ═══ -->
+<div class="toast" id="toast"></div>
+
+<script>
+/* ══════════════════════════════════════════════
+   CRYPTO LAYER — AES-256-GCM + PBKDF2
+══════════════════════════════════════════════ */
+const PBKDF2_ITER = 310000; // NIST recommended 2024
+const SALT_KEY    = 'vault_salt';
+const VAULT_KEY   = 'vault_data';
+const BIO_KEY     = 'vault_bio_cred';
+
+async function deriveKey(password, salt) {
+  const enc = new TextEncoder();
+  const raw = await crypto.subtle.importKey('raw', enc.encode(password), 'PBKDF2', false, ['deriveKey']);
+  return crypto.subtle.deriveKey(
+    { name:'PBKDF2', salt, iterations: PBKDF2_ITER, hash:'SHA-256' },
+    raw,
+    { name:'AES-GCM', length:256 },
+    false, ['encrypt','decrypt']
+  );
+}
+
+async function encrypt(data, key) {
+  const iv  = crypto.getRandomValues(new Uint8Array(12));
+  const enc = new TextEncoder();
+  const ct  = await crypto.subtle.encrypt({ name:'AES-GCM', iv }, key, enc.encode(JSON.stringify(data)));
+  return btoa(String.fromCharCode(...iv) + String.fromCharCode(...new Uint8Array(ct)));
+}
+
+async function decrypt(b64, key) {
+  const raw = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+  const iv   = raw.slice(0, 12);
+  const ct   = raw.slice(12);
+  const pt   = await crypto.subtle.decrypt({ name:'AES-GCM', iv }, key, ct);
+  return JSON.parse(new TextDecoder().decode(pt));
+}
+
+function getSalt() {
+  let s = localStorage.getItem(SALT_KEY);
+  if (!s) {
+    const arr = crypto.getRandomValues(new Uint8Array(32));
+    s = btoa(String.fromCharCode(...arr));
+    localStorage.setItem(SALT_KEY, s);
+  }
+  return Uint8Array.from(atob(s), c => c.charCodeAt(0));
+}
+
+/* ══════════════════════════════════════════════
+   APP STATE
+══════════════════════════════════════════════ */
+let _key     = null;   // CryptoKey — in-memory only, never persisted
+let _entries = [];     // plaintext entries in memory
+let _editId  = null;
+
+/* ══════════════════════════════════════════════
+   SETUP
+══════════════════════════════════════════════ */
+function show(id) {
+  document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+  document.getElementById(id).classList.add('active');
+}
+
+async function setupVault() {
+  const pw  = document.getElementById('setup-pw').value;
+  const pw2 = document.getElementById('setup-pw2').value;
+  if (pw.length < 10) { toast('Password must be at least 10 characters', true); return; }
+  if (pw !== pw2)     { toast('Passwords do not match', true); return; }
+  const salt = getSalt();
+  _key       = await deriveKey(pw, salt);
+  _entries   = [];
+  await saveVault();
+  show('screen-app');
+  renderEntries();
+  toast('Sovereign vault created ✓');
+}
+
+/* ══════════════════════════════════════════════
+   LOCK / UNLOCK (password)
+══════════════════════════════════════════════ */
+async function unlock() {
+  const pw = document.getElementById('lock-pw').value;
+  if (!pw) { toast('Enter your master password', true); return; }
+  try {
+    const salt = getSalt();
+    const key  = await deriveKey(pw, salt);
+    const blob = localStorage.getItem(VAULT_KEY);
+    const data = await decrypt(blob, key);
+    _key     = key;
+    _entries = data.entries || [];
+    document.getElementById('lock-pw').value = '';
+    show('screen-app');
+    renderEntries();
+    toast('Unlocked ✓');
+  } catch {
+    toast('Wrong password', true);
+  }
+}
+
+/* ══════════════════════════════════════════════
+   BIOMETRIC (WebAuthn passkey)
+══════════════════════════════════════════════ */
+function webAuthnAvailable() {
+  return window.PublicKeyCredential !== undefined;
+}
+
+async function registerBiometric() {
+  if (!webAuthnAvailable()) { toast('Passkeys not supported on this browser', true); return; }
+  if (!_key) { toast('Unlock the vault first', true); return; }
+  try {
+    // We store a random challenge in localStorage; the passkey just proves identity
+    const cred = await navigator.credentials.create({
+      publicKey: {
+        challenge: crypto.getRandomValues(new Uint8Array(32)),
+        rp: { name: 'Sovereign by Copps', id: location.hostname || 'localhost' },
+        user: { id: new TextEncoder().encode('vault-user'), name: 'vault', displayName: 'Vault User' },
+        pubKeyCredParams: [{ type:'public-key', alg:-7 }, { type:'public-key', alg:-257 }],
+        authenticatorSelection: { userVerification:'required', residentKey:'preferred' },
+        timeout: 60000,
+      }
+    });
+    localStorage.setItem(BIO_KEY, JSON.stringify({
+      id: btoa(String.fromCharCode(...new Uint8Array(cred.rawId))),
+      type: cred.type
+    }));
+    closeModal('settings-modal');
+    toast('Biometric registered ✓');
+    checkBiometricAvailable();
+  } catch(e) {
+    toast('Biometric registration cancelled', true);
+  }
+}
+
+async function unlockBiometric() {
+  const stored = localStorage.getItem(BIO_KEY);
+  if (!stored) { toast('No passkey registered', true); return; }
+  const { id } = JSON.parse(stored);
+  const rawId  = Uint8Array.from(atob(id), c => c.charCodeAt(0));
+  try {
+    await navigator.credentials.get({
+      publicKey: {
+        challenge: crypto.getRandomValues(new Uint8Array(32)),
+        allowCredentials: [{ type:'public-key', id: rawId }],
+        userVerification: 'required',
+        timeout: 60000,
+      }
+    });
+    // Biometric proved — but we still need the key. We store a password-encrypted
+    // copy of the vault key, wrapped by a device-bound secret.
+    // For this implementation we prompt once for password then cache key in sessionStorage.
+    const sessionRaw = sessionStorage.getItem('vk');
+    if (sessionRaw) {
+      // Key survived the session — restore it
+      const raw = Uint8Array.from(atob(sessionRaw), c => c.charCodeAt(0));
+      _key = await crypto.subtle.importKey('raw', raw, { name:'AES-GCM', length:256 }, true, ['encrypt','decrypt']);
+      const blob = localStorage.getItem(VAULT_KEY);
+      _entries = (await decrypt(blob, _key)).entries || [];
+      document.getElementById('lock-pw').value = '';
+      show('screen-app');
+      renderEntries();
+      toast('Unlocked ✓');
+    } else {
+      // First biometric use after fresh session — fall back to password once
+      document.getElementById('bio-hint').textContent = 'Biometric verified ✓ — enter password once to bind key this session';
+      document.getElementById('bio-hint').style.display = 'block';
+      toast('Enter password once to complete biometric bind');
+    }
+  } catch {
+    toast('Biometric failed or cancelled', true);
+  }
+}
+
+function checkBiometricAvailable() {
+  const hasBio = !!localStorage.getItem(BIO_KEY) && webAuthnAvailable();
+  const btn    = document.getElementById('bio-btn');
+  btn.disabled = !hasBio;
+  if (hasBio) btn.style.opacity = '1';
+}
+
+/* Cache key in sessionStorage (tab-scoped, RAM on most browsers) */
+async function cacheKeyInSession(key) {
+  const raw = await crypto.subtle.exportKey('raw', key);
+  sessionStorage.setItem('vk', btoa(String.fromCharCode(...new Uint8Array(raw))));
+}
+
+/* ══════════════════════════════════════════════
+   VAULT PERSISTENCE
+══════════════════════════════════════════════ */
+async function saveVault() {
+  if (!_key) return;
+  const blob = await encrypt({ entries: _entries }, _key);
+  localStorage.setItem(VAULT_KEY, blob);
+  await cacheKeyInSession(_key);
+}
+
+/* ══════════════════════════════════════════════
+   ENTRIES — CRUD
+══════════════════════════════════════════════ */
+let _revealed = new Set();
+
+function renderEntries() {
+  const q    = (document.getElementById('search-input')?.value || '').toLowerCase();
+  const list = document.getElementById('entry-list');
+  const filtered = _entries.filter(e => e.name.toLowerCase().includes(q));
+  document.getElementById('entries-count').textContent =
+    filtered.length + ' entr' + (filtered.length === 1 ? 'y' : 'ies');
+
+  if (!filtered.length) {
+    list.innerHTML = `<div class="empty-state">
+      <div class="empty-icon">${_entries.length ? '🔍' : '🗝️'}</div>
+      <div class="empty-title">${_entries.length ? 'No matches' : 'No entries yet'}</div>
+      <div>${_entries.length ? 'Try a different search' : 'Tap + to add your first secret'}</div>
+    </div>`;
+    return;
+  }
+
+  list.innerHTML = filtered.map(e => {
+    const isOpen     = document.querySelector(`.entry-card[data-id="${e.id}"]`)?.classList.contains('open');
+    const isRevealed = _revealed.has(e.id);
+    const isMulti    = e.multiline;
+    const preview    = isMulti ? '(multi-line)' : '••••••••';
+    return `
+    <div class="entry-card${isOpen?' open':''}" data-id="${e.id}">
+      <div class="entry-header" onclick="toggleEntry('${e.id}')">
+        <span class="entry-name">${esc(e.name)}</span>
+        ${isMulti ? '<span class="entry-badge">multi-line</span>' : ''}
+        <span class="entry-chevron">▼</span>
+      </div>
+      <div class="entry-body">
+        <div class="entry-value-wrap">
+          <div class="entry-value${isRevealed?'':' masked'}">${esc(e.value)}</div>
+          <button class="entry-reveal" onclick="toggleReveal('${e.id}')" title="${isRevealed?'Hide':'Reveal'}">
+            ${isRevealed ? '🙈' : '👁'}
+          </button>
+        </div>
+        <div class="entry-actions">
+          <button class="btn btn-ghost btn-sm" onclick="copyEntry('${e.id}')">📋 Copy</button>
+          <button class="btn btn-ghost btn-sm" onclick="editEntry('${e.id}')">✏️ Edit</button>
+          <button class="btn btn-ghost btn-sm btn-danger" onclick="deleteEntry('${e.id}')">Delete</button>
+        </div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function toggleEntry(id) {
+  const card = document.querySelector(`.entry-card[data-id="${id}"]`);
+  if (card) card.classList.toggle('open');
+}
+
+function toggleReveal(id) {
+  _revealed.has(id) ? _revealed.delete(id) : _revealed.add(id);
+  renderEntries();
+  // Re-open card
+  setTimeout(() => {
+    const card = document.querySelector(`.entry-card[data-id="${id}"]`);
+    if (card) card.classList.add('open');
+  }, 10);
+}
+
+function copyEntry(id) {
+  const e = _entries.find(x => x.id === id);
+  if (!e) return;
+  navigator.clipboard.writeText(e.value).catch(() => {});
+  toast('Copied to clipboard');
+}
+
+function openAddModal() {
+  _editId = null;
+  document.getElementById('entry-modal-title').textContent = 'New Entry';
+  document.getElementById('e-name').value = '';
+  document.getElementById('e-value-single').value = '';
+  document.getElementById('e-value-multi').value = '';
+  document.getElementById('e-multiline').checked = false;
+  toggleValueField();
+  openModal('entry-modal');
+  setTimeout(() => document.getElementById('e-name').focus(), 300);
+}
+
+function editEntry(id) {
+  const e = _entries.find(x => x.id === id);
+  if (!e) return;
+  _editId = id;
+  document.getElementById('entry-modal-title').textContent = 'Edit Entry';
+  document.getElementById('e-name').value = e.name;
+  document.getElementById('e-multiline').checked = !!e.multiline;
+  toggleValueField();
+  if (e.multiline) document.getElementById('e-value-multi').value = e.value;
+  else             document.getElementById('e-value-single').value = e.value;
+  openModal('entry-modal');
+}
+
+async function saveEntry() {
+  const name      = document.getElementById('e-name').value.trim();
+  const isMulti   = document.getElementById('e-multiline').checked;
+  const value     = isMulti
+    ? document.getElementById('e-value-multi').value
+    : document.getElementById('e-value-single').value.trim();
+  if (!name)  { toast('Name is required', true); return; }
+  if (!value) { toast('Value is required', true); return; }
+
+  if (_editId) {
+    const idx = _entries.findIndex(x => x.id === _editId);
+    if (idx !== -1) _entries[idx] = { ..._entries[idx], name, value, multiline: isMulti };
+  } else {
+    _entries.push({ id: crypto.randomUUID(), name, value, multiline: isMulti, created: Date.now() });
+  }
+  await saveVault();
+  closeModal('entry-modal');
+  renderEntries();
+  toast(_editId ? 'Entry updated' : 'Entry saved');
+}
+
+async function deleteEntry(id) {
+  const e = _entries.find(x => x.id === id);
+  if (!confirm(`Delete "${e?.name}"? This cannot be undone.`)) return;
+  _entries = _entries.filter(x => x.id !== id);
+  _revealed.delete(id);
+  await saveVault();
+  renderEntries();
+  toast('Entry deleted');
+}
+
+/* ══════════════════════════════════════════════
+   SETTINGS
+══════════════════════════════════════════════ */
+function openSettings() { openModal('settings-modal'); }
+
+async function exportVault() {
+  const blob = localStorage.getItem(VAULT_KEY);
+  const salt = localStorage.getItem(SALT_KEY);
+  if (!blob)  { toast('Nothing to export', true); return; }
+  const data = JSON.stringify({ blob, salt, version: 1 });
+  const a    = document.createElement('a');
+  a.href     = URL.createObjectURL(new Blob([data], { type:'application/octet-stream' }));
+  a.download = `sovereign-backup-${new Date().toISOString().slice(0,10)}.vaultbak`;
+  a.click();
+  toast('Backup exported');
+}
+
+async function importVault(input) {
+  const file = input.files[0];
+  if (!file) return;
+  const text = await file.text();
+  try {
+    const { blob, salt } = JSON.parse(text);
+    localStorage.setItem(VAULT_KEY, blob);
+    localStorage.setItem(SALT_KEY, salt);
+    toast('Backup imported — unlock with your password');
+    lockApp();
+  } catch { toast('Invalid backup file', true); }
+  input.value = '';
+}
+
+function resetVault() {
+  if (!confirm('This will permanently delete all entries and reset Sovereign. Are you sure?')) return;
+  localStorage.clear();
+  sessionStorage.clear();
+  _key = null; _entries = [];
+  location.reload();
+}
+
+/* ══════════════════════════════════════════════
+   LOCK
+══════════════════════════════════════════════ */
+function lockApp() {
+  _key = null; _entries = [];
+  sessionStorage.removeItem('vk');
+  show('screen-lock');
+  document.getElementById('lock-pw').value = '';
+}
+
+/* ══════════════════════════════════════════════
+   UI HELPERS
+══════════════════════════════════════════════ */
+function toggleValueField() {
+  const isMulti = document.getElementById('e-multiline').checked;
+  document.getElementById('e-value-single').style.display = isMulti ? 'none' : '';
+  document.getElementById('e-value-multi').style.display  = isMulti ? ''     : 'none';
+}
+
+function openModal(id) {
+  document.getElementById(id).classList.add('open');
+  document.body.style.overflow = 'hidden';
+}
+function closeModal(id) {
+  document.getElementById(id).classList.remove('open');
+  document.body.style.overflow = '';
+}
+
+function toggleEye(inputId, btn) {
+  const el = document.getElementById(inputId);
+  el.type  = el.type === 'password' ? 'text' : 'password';
+  btn.textContent = el.type === 'password' ? '👁' : '🙈';
+}
+
+let _toastTimer;
+function toast(msg, isError) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.className   = 'toast show' + (isError ? ' error' : '');
+  clearTimeout(_toastTimer);
+  _toastTimer = setTimeout(() => t.className = 'toast', 2400);
+}
+
+function esc(s) {
+  return String(s)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}
+
+/* Password strength meter on setup */
+document.getElementById('setup-pw')?.addEventListener('input', function() {
+  const pw = this.value;
+  let score = 0;
+  if (pw.length >= 10) score++;
+  if (pw.length >= 16) score++;
+  if (/[A-Z]/.test(pw)) score++;
+  if (/[0-9]/.test(pw)) score++;
+  if (/[^a-zA-Z0-9]/.test(pw)) score++;
+  const colors = ['','#c0392b','#e67e22','#f1c40f','#27ae60','#1abc9c'];
+  const labels = ['','Very weak','Weak','Fair','Strong','Very strong'];
+  const el = document.getElementById('setup-strength');
+  if (!pw) { el.innerHTML = ''; return; }
+  el.innerHTML = `
+    <div style="background:#eee;height:4px;border-radius:2px;overflow:hidden;margin-bottom:4px">
+      <div style="height:100%;width:${score*20}%;background:${colors[score]};transition:width 0.3s,background 0.3s;border-radius:2px"></div>
+    </div>
+    <span style="font-size:0.75rem;color:${colors[score]}">${labels[score]}</span>`;
+});
+
+/* Keyboard shortcuts */
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') {
+    document.querySelectorAll('.modal-overlay.open').forEach(m => m.classList.remove('open'));
+    document.body.style.overflow = '';
+  }
+  if (e.key === 'Enter' && document.getElementById('screen-lock')?.classList.contains('active')) unlock();
+  if (e.key === 'Enter' && document.getElementById('screen-setup')?.classList.contains('active')) setupVault();
+});
+
+/* Close modal on overlay click */
+document.querySelectorAll('.modal-overlay').forEach(overlay => {
+  overlay.addEventListener('click', e => {
+    if (e.target === overlay) { overlay.classList.remove('open'); document.body.style.overflow = ''; }
+  });
+});
+
+/* ══════════════════════════════════════════════
+   BOOT
+══════════════════════════════════════════════ */
+(async function boot() {
+  const hasVault = !!localStorage.getItem(VAULT_KEY);
+
+  if (!hasVault) {
+    show('screen-setup');
+    return;
+  }
+
+  // Try restoring session-cached key (same tab session)
+  const sessionRaw = sessionStorage.getItem('vk');
+  if (sessionRaw) {
+    try {
+      const raw  = Uint8Array.from(atob(sessionRaw), c => c.charCodeAt(0));
+      _key       = await crypto.subtle.importKey('raw', raw, { name:'AES-GCM', length:256 }, true, ['encrypt','decrypt']);
+      const blob = localStorage.getItem(VAULT_KEY);
+      _entries   = (await decrypt(blob, _key)).entries || [];
+      show('screen-app');
+      renderEntries();
+      return;
+    } catch { sessionStorage.removeItem('vk'); }
+  }
+
+  show('screen-lock');
+  checkBiometricAvailable();
+})();
+</script>
+
+<!-- PWA Service Worker registration -->
+<script>
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('sw.js').catch(() => {});
+}
+</script>
+</body>
+</html>
