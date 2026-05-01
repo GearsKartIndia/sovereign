@@ -1,4 +1,4 @@
-const CACHE = 'vault-v1';
+const CACHE = 'vault-v2';
 const ASSETS = ['/', '/index.html', '/manifest.json'];
 
 self.addEventListener('install', e => {

@@ -728,7 +728,7 @@ async function saveVault() {
   if (!_key) return;
   const blob = await encrypt({ entries: _entries }, _key);
   localStorage.setItem(VAULT_KEY, blob);
-  await cacheKeyInSession(_key);
+  try { await cacheKeyInSession(_key); } catch { /* session restore is optional */ }
 }
 
 /* ══════════════════════════════════════════════
