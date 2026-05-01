@@ -555,7 +555,7 @@ async function deriveKey(password, salt) {
     { name:'PBKDF2', salt, iterations: PBKDF2_ITER, hash:'SHA-256' },
     raw,
     { name:'AES-GCM', length:256 },
-    false, ['encrypt','decrypt']
+    true, ['encrypt','decrypt']
   );
 }
 

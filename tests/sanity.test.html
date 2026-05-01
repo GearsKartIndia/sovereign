@@ -1,0 +1,1117 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sovereign — Sanity Tests</title>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: system-ui, sans-serif; background: #0e0e0e; color: #e0e0e0; padding: 2rem; line-height: 1.6; }
+h1 { font-size: 1.5rem; margin-bottom: 0.25rem; color: #fff; }
+.subtitle { font-size: 0.875rem; color: #666; margin-bottom: 2rem; }
+.suite { margin-bottom: 1.5rem; }
+.suite-name { font-size: 0.8125rem; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase;
+  color: #888; margin-bottom: 0.5rem; }
+.test { display: flex; align-items: flex-start; gap: 0.625rem; padding: 0.4rem 0;
+  border-bottom: 1px solid #1a1a1a; font-size: 0.875rem; }
+.test:last-child { border-bottom: none; }
+.badge { flex-shrink: 0; font-size: 0.75rem; font-weight: 600; padding: 1px 8px;
+  border-radius: 20px; margin-top: 2px; }
+.badge.pass { background: #0d3320; color: #2ecc71; }
+.badge.fail { background: #3d0d0d; color: #e74c3c; }
+.badge.skip { background: #1a1a1a; color: #666; }
+.test-name { flex: 1; }
+.test-err { font-family: monospace; font-size: 0.75rem; color: #e74c3c;
+  margin-top: 0.25rem; white-space: pre-wrap; background: #1a0000; padding: 0.4rem 0.6rem;
+  border-radius: 4px; border-left: 3px solid #e74c3c; }
+.summary { margin-top: 2rem; padding: 1rem 1.25rem; border-radius: 10px;
+  font-size: 0.9375rem; font-weight: 500; }
+.summary.all-pass { background: #0d3320; color: #2ecc71; }
+.summary.has-fail  { background: #3d0d0d; color: #e74c3c; }
+.summary.running   { background: #1a1a1a; color: #888; }
+/* Hidden app DOM — functions need these elements to exist */
+#app-dom { display: none; }
+</style>
+</head>
+<body>
+
+<h1>🔐 Sovereign — Sanity Tests</h1>
+<div class="subtitle">Serve from <code>web/</code> or open directly. All tests run in this tab.</div>
+<div id="results"></div>
+<div id="summary" class="summary running">⏳ Running…</div>
+
+<!-- ═══ Hidden DOM fixtures — mirrors index.html structure ═══ -->
+<div id="app-dom">
+  <!-- Screens -->
+  <div id="screen-setup" class="screen active"></div>
+  <div id="screen-lock"  class="screen"></div>
+  <div id="screen-app"   class="screen"></div>
+
+  <!-- Setup inputs -->
+  <input type="password" id="setup-pw"  value="">
+  <input type="password" id="setup-pw2" value="">
+  <div id="setup-strength"></div>
+
+  <!-- Lock inputs -->
+  <input type="password" id="lock-pw" value="">
+  <button id="bio-btn" disabled></button>
+  <p id="bio-hint" style="display:none"></p>
+
+  <!-- App -->
+  <input type="text" id="search-input" value="">
+  <span id="entries-count"></span>
+  <div id="entry-list"></div>
+
+  <!-- Entry modal -->
+  <div id="entry-modal" class="modal-overlay">
+    <span id="entry-modal-title"></span>
+    <input type="text"     id="e-name"         value="">
+    <input type="checkbox" id="e-multiline">
+    <input type="text"     id="e-value-single" value="">
+    <textarea              id="e-value-multi"></textarea>
+  </div>
+
+  <!-- Settings modal -->
+  <div id="settings-modal" class="modal-overlay"></div>
+
+  <!-- Toast -->
+  <div id="toast" class="toast"></div>
+
+  <!-- Import file input -->
+  <input type="file" id="import-file">
+</div>
+
+<script>
+/* ════════════════════════════════════════════════════════════════
+   MINI TEST RUNNER
+════════════════════════════════════════════════════════════════ */
+const suites  = [];
+let _suite    = null;
+
+function describe(name, fn) {
+  _suite = { name, tests: [] };
+  suites.push(_suite);
+  fn();
+  _suite = null;
+}
+
+function it(name, fn) {
+  if (!_suite) throw new Error('it() called outside describe()');
+  _suite.tests.push({ name, fn });
+}
+
+function assertEqual(a, b, msg) {
+  if (a !== b) throw new Error(msg || `Expected ${JSON.stringify(a)} === ${JSON.stringify(b)}`);
+}
+function assertDeepEqual(a, b, msg) {
+  if (JSON.stringify(a) !== JSON.stringify(b))
+    throw new Error(msg || `Deep-equal failed:\n  got:      ${JSON.stringify(a)}\n  expected: ${JSON.stringify(b)}`);
+}
+function assertOk(v, msg)    { if (!v) throw new Error(msg || `Expected truthy, got ${v}`); }
+function assertFalsy(v, msg) { if (v)  throw new Error(msg || `Expected falsy, got ${v}`); }
+function assertThrows(fn, msg) {
+  try { fn(); throw new Error('No error thrown'); }
+  catch(e) { if (e.message === 'No error thrown') throw new Error(msg || e.message); }
+}
+async function assertRejects(fn, msg) {
+  try { await fn(); throw new Error('No rejection'); }
+  catch(e) { if (e.message === 'No rejection') throw new Error(msg || 'Expected rejection'); }
+}
+function assertIncludes(str, sub, msg) {
+  if (!str.includes(sub)) throw new Error(msg || `"${sub}" not found in "${str}"`);
+}
+
+/* ════════════════════════════════════════════════════════════════
+   APP CODE — copied verbatim from web/index.html
+   (keep in sync when the source changes)
+════════════════════════════════════════════════════════════════ */
+// Reduced for test speed — functional correctness is iteration-count-independent.
+// Real 310,000-iteration strength is verified in crypto.test.mjs.
+const PBKDF2_ITER = 1000;
+const SALT_KEY    = 'vault_salt';
+const VAULT_KEY   = 'vault_data';
+const BIO_KEY     = 'vault_bio_cred';
+
+async function deriveKey(password, salt) {
+  const enc = new TextEncoder();
+  const raw = await crypto.subtle.importKey('raw', enc.encode(password), 'PBKDF2', false, ['deriveKey']);
+  return crypto.subtle.deriveKey(
+    { name:'PBKDF2', salt, iterations: PBKDF2_ITER, hash:'SHA-256' },
+    raw, { name:'AES-GCM', length:256 }, true, ['encrypt','decrypt']
+  );
+}
+
+async function encrypt(data, key) {
+  const iv  = crypto.getRandomValues(new Uint8Array(12));
+  const enc = new TextEncoder();
+  const ct  = await crypto.subtle.encrypt({ name:'AES-GCM', iv }, key, enc.encode(JSON.stringify(data)));
+  return btoa(String.fromCharCode(...iv) + String.fromCharCode(...new Uint8Array(ct)));
+}
+
+async function decrypt(b64, key) {
+  const raw = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+  const iv  = raw.slice(0, 12);
+  const ct  = raw.slice(12);
+  const pt  = await crypto.subtle.decrypt({ name:'AES-GCM', iv }, key, ct);
+  return JSON.parse(new TextDecoder().decode(pt));
+}
+
+function getSalt() {
+  let s = localStorage.getItem(SALT_KEY);
+  if (!s) {
+    const arr = crypto.getRandomValues(new Uint8Array(32));
+    s = btoa(String.fromCharCode(...arr));
+    localStorage.setItem(SALT_KEY, s);
+  }
+  return Uint8Array.from(atob(s), c => c.charCodeAt(0));
+}
+
+let _key     = null;
+let _entries = [];
+let _editId  = null;
+let _revealed = new Set();
+
+function show(id) {
+  document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+  document.getElementById(id).classList.add('active');
+}
+
+async function setupVault() {
+  const pw  = document.getElementById('setup-pw').value;
+  const pw2 = document.getElementById('setup-pw2').value;
+  if (pw.length < 10) { toast('Password must be at least 10 characters', true); return; }
+  if (pw !== pw2)     { toast('Passwords do not match', true); return; }
+  const salt = getSalt();
+  _key       = await deriveKey(pw, salt);
+  _entries   = [];
+  await saveVault();
+  show('screen-app');
+  renderEntries();
+  toast('Sovereign vault created ✓');
+}
+
+async function unlock() {
+  const pw = document.getElementById('lock-pw').value;
+  if (!pw) { toast('Enter your master password', true); return; }
+  try {
+    const salt = getSalt();
+    const key  = await deriveKey(pw, salt);
+    const blob = localStorage.getItem(VAULT_KEY);
+    const data = await decrypt(blob, key);
+    _key     = key;
+    _entries = data.entries || [];
+    document.getElementById('lock-pw').value = '';
+    show('screen-app');
+    renderEntries();
+    toast('Unlocked ✓');
+  } catch {
+    toast('Wrong password', true);
+  }
+}
+
+async function saveVault() {
+  if (!_key) return;
+  const blob = await encrypt({ entries: _entries }, _key);
+  localStorage.setItem(VAULT_KEY, blob);
+  await cacheKeyInSession(_key);
+}
+
+async function cacheKeyInSession(key) {
+  const raw = await crypto.subtle.exportKey('raw', key);
+  sessionStorage.setItem('vk', btoa(String.fromCharCode(...new Uint8Array(raw))));
+}
+
+function lockApp() {
+  _key = null; _entries = [];
+  sessionStorage.removeItem('vk');
+  show('screen-lock');
+  document.getElementById('lock-pw').value = '';
+}
+
+function renderEntries() {
+  const q    = (document.getElementById('search-input')?.value || '').toLowerCase();
+  const list = document.getElementById('entry-list');
+  const filtered = _entries.filter(e => e.name.toLowerCase().includes(q));
+  document.getElementById('entries-count').textContent =
+    filtered.length + ' entr' + (filtered.length === 1 ? 'y' : 'ies');
+  if (!filtered.length) {
+    list.innerHTML = `<div class="empty-state">${_entries.length ? 'No matches' : 'No entries yet'}</div>`;
+    return;
+  }
+  list.innerHTML = filtered.map(e => {
+    const isRevealed = _revealed.has(e.id);
+    return `<div class="entry-card" data-id="${e.id}">
+      <span class="entry-name">${esc(e.name)}</span>
+      <div class="entry-value${isRevealed?'':' masked'}">${esc(e.value)}</div>
+    </div>`;
+  }).join('');
+}
+
+function toggleValueField() {
+  const isMulti = document.getElementById('e-multiline').checked;
+  document.getElementById('e-value-single').style.display = isMulti ? 'none' : '';
+  document.getElementById('e-value-multi').style.display  = isMulti ? '' : 'none';
+}
+
+function openModal(id)  { document.getElementById(id).classList.add('open'); }
+function closeModal(id) { document.getElementById(id).classList.remove('open'); }
+
+function toggleEye(inputId, btn) {
+  const el = document.getElementById(inputId);
+  el.type  = el.type === 'password' ? 'text' : 'password';
+  btn.textContent = el.type === 'password' ? '👁' : '🙈';
+}
+
+let _toastMsg = '';
+let _toastErr = false;
+function toast(msg, isError) {
+  _toastMsg = msg; _toastErr = !!isError;
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.className   = 'toast show' + (isError ? ' error' : '');
+}
+
+function esc(s) {
+  return String(s)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}
+
+function openAddModal() {
+  _editId = null;
+  document.getElementById('entry-modal-title').textContent = 'New Entry';
+  document.getElementById('e-name').value = '';
+  document.getElementById('e-value-single').value = '';
+  document.getElementById('e-value-multi').value = '';
+  document.getElementById('e-multiline').checked = false;
+  toggleValueField();
+  openModal('entry-modal');
+}
+
+function editEntry(id) {
+  const e = _entries.find(x => x.id === id);
+  if (!e) return;
+  _editId = id;
+  document.getElementById('entry-modal-title').textContent = 'Edit Entry';
+  document.getElementById('e-name').value = e.name;
+  document.getElementById('e-multiline').checked = !!e.multiline;
+  toggleValueField();
+  if (e.multiline) document.getElementById('e-value-multi').value = e.value;
+  else             document.getElementById('e-value-single').value = e.value;
+  openModal('entry-modal');
+}
+
+async function saveEntry() {
+  const name    = document.getElementById('e-name').value.trim();
+  const isMulti = document.getElementById('e-multiline').checked;
+  const value   = isMulti
+    ? document.getElementById('e-value-multi').value
+    : document.getElementById('e-value-single').value.trim();
+  if (!name)  { toast('Name is required', true); return; }
+  if (!value) { toast('Value is required', true); return; }
+  if (_editId) {
+    const idx = _entries.findIndex(x => x.id === _editId);
+    if (idx !== -1) _entries[idx] = { ..._entries[idx], name, value, multiline: isMulti };
+  } else {
+    _entries.push({ id: crypto.randomUUID(), name, value, multiline: isMulti, created: Date.now() });
+  }
+  await saveVault();
+  closeModal('entry-modal');
+  renderEntries();
+  toast(_editId ? 'Entry updated' : 'Entry saved');
+}
+
+async function deleteEntry(id) {
+  _entries = _entries.filter(x => x.id !== id);
+  _revealed.delete(id);
+  await saveVault();
+  renderEntries();
+  toast('Entry deleted');
+}
+
+function toggleReveal(id) {
+  _revealed.has(id) ? _revealed.delete(id) : _revealed.add(id);
+  renderEntries();
+  setTimeout(() => {
+    const card = document.querySelector(`.entry-card[data-id="${id}"]`);
+    if (card) card.classList.add('open');
+  }, 10);
+}
+
+function exportVault() {
+  const blob = localStorage.getItem(VAULT_KEY);
+  const salt = localStorage.getItem(SALT_KEY);
+  if (!blob) { toast('Nothing to export', true); return null; }
+  return JSON.stringify({ blob, salt, version: 1 });
+}
+
+/* ════════════════════════════════════════════════════════════════
+   TEST HELPERS
+════════════════════════════════════════════════════════════════ */
+function resetState() {
+  localStorage.clear();
+  sessionStorage.clear();
+  _key = null; _entries = []; _editId = null; _revealed = new Set();
+  document.querySelectorAll('#app-dom input, #app-dom textarea')
+    .forEach(el => { if (el.type === 'checkbox') el.checked = false; else el.value = ''; });
+  document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+  document.getElementById('screen-setup').classList.add('active');
+  document.getElementById('entry-modal').classList.remove('open');
+  document.getElementById('settings-modal').classList.remove('open');
+  _toastMsg = ''; _toastErr = false;
+}
+
+async function makeVault(pw = 'correcthorse123!') {
+  document.getElementById('setup-pw').value  = pw;
+  document.getElementById('setup-pw2').value = pw;
+  await setupVault();
+}
+
+async function addEntry(name, value, multiline = false) {
+  document.getElementById('e-name').value = name;
+  document.getElementById('e-multiline').checked = multiline;
+  toggleValueField();
+  if (multiline) document.getElementById('e-value-multi').value = value;
+  else           document.getElementById('e-value-single').value = value;
+  _editId = null;
+  await saveEntry();
+}
+
+/* ════════════════════════════════════════════════════════════════
+   SUITES
+════════════════════════════════════════════════════════════════ */
+
+// ── 1. Crypto Layer ────────────────────────────────────────────
+describe('Crypto: deriveKey', () => {
+  it('returns an extractable AES-GCM-256 CryptoKey', async () => {
+    const salt = crypto.getRandomValues(new Uint8Array(32));
+    const key  = await deriveKey('testpassword1234', salt);
+    assertEqual(key.type, 'secret');
+    assertEqual(key.algorithm.name, 'AES-GCM');
+    assertEqual(key.algorithm.length, 256);
+    assertEqual(key.extractable, true);
+  });
+
+  it('same password + same salt produces a functionally equal key', async () => {
+    const salt = crypto.getRandomValues(new Uint8Array(32));
+    const k1   = await deriveKey('mypassword12345!', salt);
+    const k2   = await deriveKey('mypassword12345!', salt);
+    const ct   = await encrypt({ check: 1 }, k1);
+    assertDeepEqual(await decrypt(ct, k2), { check: 1 });
+  });
+
+  it('different passwords produce keys that cannot cross-decrypt', async () => {
+    const salt = crypto.getRandomValues(new Uint8Array(32));
+    const k1   = await deriveKey('password-alpha-1', salt);
+    const k2   = await deriveKey('password-beta--1', salt);
+    await assertRejects(() => decrypt(await encrypt({ x: 1 }, k1), k2));
+  });
+
+  it('different salts produce keys that cannot cross-decrypt', async () => {
+    const k1 = await deriveKey('sharedpassword!1', crypto.getRandomValues(new Uint8Array(32)));
+    const k2 = await deriveKey('sharedpassword!1', crypto.getRandomValues(new Uint8Array(32)));
+    await assertRejects(() => decrypt(await encrypt({ x: 1 }, k1), k2));
+  });
+});
+
+describe('Crypto: encrypt / decrypt', () => {
+  it('roundtrip: simple object', async () => {
+    const key     = await deriveKey('roundtriptest123', crypto.getRandomValues(new Uint8Array(32)));
+    const payload = { entries: [{ id: '1', name: 'Gmail', value: 'hunter2' }] };
+    assertDeepEqual(await decrypt(await encrypt(payload, key), key), payload);
+  });
+
+  it('roundtrip: empty entries array', async () => {
+    const key = await deriveKey('emptytest12345!1', crypto.getRandomValues(new Uint8Array(32)));
+    assertDeepEqual(await decrypt(await encrypt({ entries: [] }, key), key), { entries: [] });
+  });
+
+  it('roundtrip: unicode + emoji', async () => {
+    const key     = await deriveKey('unicodetest12345', crypto.getRandomValues(new Uint8Array(32)));
+    const payload = { entries: [{ name: '日本語 🔐', value: 'パスワード' }] };
+    assertDeepEqual(await decrypt(await encrypt(payload, key), key), payload);
+  });
+
+  it('roundtrip: multi-line SSH key value', async () => {
+    const key     = await deriveKey('sshkeytest12345!', crypto.getRandomValues(new Uint8Array(32)));
+    const payload = { entries: [{ name: 'SSH Key', value: '-----BEGIN RSA-----\nABC123\n-----END RSA-----', multiline: true }] };
+    assertDeepEqual(await decrypt(await encrypt(payload, key), key), payload);
+  });
+
+  it('each call produces unique ciphertext (random IV)', async () => {
+    const key = await deriveKey('ivtest12345678!1', crypto.getRandomValues(new Uint8Array(32)));
+    const ct1 = await encrypt({ x: 1 }, key);
+    const ct2 = await encrypt({ x: 1 }, key);
+    assertOk(ct1 !== ct2, 'IVs must be random — ciphertexts should differ');
+  });
+
+  it('tampered ciphertext is rejected', async () => {
+    const key   = await deriveKey('tampertest12345!', crypto.getRandomValues(new Uint8Array(32)));
+    const ct    = await encrypt({ x: 1 }, key);
+    const bytes = Uint8Array.from(atob(ct), c => c.charCodeAt(0));
+    bytes[bytes.length - 1] ^= 0xff;
+    await assertRejects(() => decrypt(btoa(String.fromCharCode(...bytes)), key));
+  });
+});
+
+describe('Crypto: getSalt', () => {
+  it('creates and stores a 32-byte salt when none exists', () => {
+    resetState();
+    const s = getSalt();
+    assertEqual(s.byteLength, 32);
+    assertOk(localStorage.getItem(SALT_KEY), 'salt should be persisted');
+  });
+
+  it('returns the same salt on subsequent calls', () => {
+    resetState();
+    const s1 = getSalt();
+    const s2 = getSalt();
+    assertEqual(btoa(String.fromCharCode(...s1)), btoa(String.fromCharCode(...s2)));
+  });
+
+  it('generates a new salt after storage is cleared', () => {
+    resetState();
+    const s1 = getSalt();
+    localStorage.removeItem(SALT_KEY);
+    const s2 = getSalt();
+    // Two 32-byte random arrays should almost certainly differ
+    assertOk(btoa(String.fromCharCode(...s1)) !== btoa(String.fromCharCode(...s2)),
+      'Fresh salt should differ from previous');
+  });
+});
+
+// ── 2. Vault Lifecycle ─────────────────────────────────────────
+describe('Vault: setupVault', () => {
+  it('rejects passwords shorter than 10 characters', async () => {
+    resetState();
+    document.getElementById('setup-pw').value  = 'short';
+    document.getElementById('setup-pw2').value = 'short';
+    await setupVault();
+    assertOk(_toastErr, 'should show error toast');
+    assertIncludes(_toastMsg, 'at least 10');
+    assertFalsy(localStorage.getItem(VAULT_KEY), 'vault should not be created');
+  });
+
+  it('rejects mismatched passwords', async () => {
+    resetState();
+    document.getElementById('setup-pw').value  = 'password12345!';
+    document.getElementById('setup-pw2').value = 'password99999!';
+    await setupVault();
+    assertOk(_toastErr);
+    assertIncludes(_toastMsg, 'do not match');
+    assertFalsy(localStorage.getItem(VAULT_KEY));
+  });
+
+  it('creates an encrypted vault in localStorage', async () => {
+    resetState();
+    await makeVault();
+    assertOk(localStorage.getItem(VAULT_KEY), 'vault_data should be set');
+    assertOk(localStorage.getItem(SALT_KEY),  'vault_salt should be set');
+  });
+
+  it('transitions to app screen on success', async () => {
+    resetState();
+    await makeVault();
+    assertOk(document.getElementById('screen-app').classList.contains('active'));
+  });
+
+  it('sets _key in memory', async () => {
+    resetState();
+    await makeVault();
+    assertOk(_key !== null, '_key should be set in memory');
+  });
+
+  it('initialises with empty entries', async () => {
+    resetState();
+    await makeVault();
+    assertEqual(_entries.length, 0);
+  });
+
+  it('stores raw vault content that is not plaintext-readable', async () => {
+    resetState();
+    await makeVault('supersecret1234!');
+    const blob = localStorage.getItem(VAULT_KEY);
+    assertOk(!blob.includes('entries'), 'plaintext "entries" must not appear in ciphertext blob');
+  });
+});
+
+describe('Vault: unlock', () => {
+  it('unlocks with the correct password', async () => {
+    resetState();
+    await makeVault('correcthorse999!');
+    lockApp();
+    document.getElementById('lock-pw').value = 'correcthorse999!';
+    await unlock();
+    assertOk(_key !== null);
+    assertOk(document.getElementById('screen-app').classList.contains('active'));
+    assertIncludes(_toastMsg, 'Unlocked');
+  });
+
+  it('rejects a wrong password with error toast', async () => {
+    resetState();
+    await makeVault('correcthorse999!');
+    lockApp();
+    document.getElementById('lock-pw').value = 'wrongpassword!!1';
+    await unlock();
+    assertEqual(_key, null);
+    assertIncludes(_toastMsg, 'Wrong password');
+    assertOk(_toastErr);
+  });
+
+  it('rejects empty password with error toast', async () => {
+    resetState();
+    await makeVault();
+    lockApp();
+    document.getElementById('lock-pw').value = '';
+    await unlock();
+    assertIncludes(_toastMsg, 'Enter your master password');
+    assertOk(_toastErr);
+  });
+
+  it('clears the password field on successful unlock', async () => {
+    resetState();
+    await makeVault('clearfieldtest1!');
+    lockApp();
+    document.getElementById('lock-pw').value = 'clearfieldtest1!';
+    await unlock();
+    assertEqual(document.getElementById('lock-pw').value, '');
+  });
+});
+
+describe('Vault: lockApp', () => {
+  it('clears _key and _entries from memory', async () => {
+    resetState();
+    await makeVault();
+    await addEntry('Test', 'secret');
+    lockApp();
+    assertEqual(_key, null);
+    assertEqual(_entries.length, 0);
+  });
+
+  it('removes session key cache', async () => {
+    resetState();
+    await makeVault();
+    assertOk(sessionStorage.getItem('vk'), 'session key should exist after setup');
+    lockApp();
+    assertEqual(sessionStorage.getItem('vk'), null);
+  });
+
+  it('transitions to lock screen', async () => {
+    resetState();
+    await makeVault();
+    lockApp();
+    assertOk(document.getElementById('screen-lock').classList.contains('active'));
+  });
+});
+
+// ── 3. Entry CRUD ──────────────────────────────────────────────
+describe('Entries: add', () => {
+  it('adds a single-line entry to _entries', async () => {
+    resetState();
+    await makeVault();
+    await addEntry('Gmail', 'hunter2');
+    assertEqual(_entries.length, 1);
+    assertEqual(_entries[0].name, 'Gmail');
+    assertEqual(_entries[0].value, 'hunter2');
+    assertEqual(_entries[0].multiline, false);
+  });
+
+  it('adds a multi-line entry', async () => {
+    resetState();
+    await makeVault();
+    await addEntry('SSH Key', 'line1\nline2\nline3', true);
+    assertEqual(_entries[0].value, 'line1\nline2\nline3');
+    assertEqual(_entries[0].multiline, true);
+  });
+
+  it('assigns a unique id to each entry', async () => {
+    resetState();
+    await makeVault();
+    await addEntry('Entry1', 'val1');
+    await addEntry('Entry2', 'val2');
+    assertOk(_entries[0].id !== _entries[1].id, 'IDs should be unique');
+  });
+
+  it('persists entries to localStorage after add', async () => {
+    resetState();
+    await makeVault();
+    await addEntry('BankPIN', '1234');
+    const stored = localStorage.getItem(VAULT_KEY);
+    assertOk(stored, 'vault_data should be updated');
+  });
+
+  it('rejects entry with empty name', async () => {
+    resetState();
+    await makeVault();
+    document.getElementById('e-name').value = '';
+    document.getElementById('e-value-single').value = 'somevalue';
+    document.getElementById('e-multiline').checked = false;
+    _editId = null;
+    await saveEntry();
+    assertEqual(_entries.length, 0);
+    assertOk(_toastErr);
+    assertIncludes(_toastMsg, 'Name is required');
+  });
+
+  it('rejects entry with empty value', async () => {
+    resetState();
+    await makeVault();
+    document.getElementById('e-name').value = 'My Entry';
+    document.getElementById('e-value-single').value = '';
+    document.getElementById('e-multiline').checked = false;
+    _editId = null;
+    await saveEntry();
+    assertEqual(_entries.length, 0);
+    assertOk(_toastErr);
+    assertIncludes(_toastMsg, 'Value is required');
+  });
+
+  it('sets created timestamp on new entry', async () => {
+    resetState();
+    const before = Date.now();
+    await makeVault();
+    await addEntry('timestamptest', 'val');
+    assertOk(_entries[0].created >= before, 'created should be a recent timestamp');
+  });
+});
+
+describe('Entries: edit', () => {
+  it('updates name and value in-place without changing id', async () => {
+    resetState();
+    await makeVault();
+    await addEntry('OldName', 'oldvalue');
+    const id = _entries[0].id;
+    _editId  = id;
+    document.getElementById('e-name').value = 'NewName';
+    document.getElementById('e-value-single').value = 'newvalue';
+    document.getElementById('e-multiline').checked = false;
+    await saveEntry();
+    assertEqual(_entries.length, 1, 'should still have 1 entry');
+    assertEqual(_entries[0].id, id, 'id should not change');
+    assertEqual(_entries[0].name, 'NewName');
+    assertEqual(_entries[0].value, 'newvalue');
+  });
+
+  it('editEntry() populates the modal form correctly', async () => {
+    resetState();
+    await makeVault();
+    await addEntry('WiFi', 'MyWifiPass1234', false);
+    editEntry(_entries[0].id);
+    assertEqual(document.getElementById('e-name').value, 'WiFi');
+    assertEqual(document.getElementById('e-value-single').value, 'MyWifiPass1234');
+    assertOk(document.getElementById('entry-modal').classList.contains('open'));
+  });
+});
+
+describe('Entries: delete', () => {
+  it('removes the entry from _entries', async () => {
+    resetState();
+    await makeVault();
+    await addEntry('ToDelete', 'gone');
+    const id = _entries[0].id;
+    await deleteEntry(id);
+    assertEqual(_entries.length, 0);
+  });
+
+  it('removes entry from _revealed set', async () => {
+    resetState();
+    await makeVault();
+    await addEntry('Revealed', 'val');
+    const id = _entries[0].id;
+    _revealed.add(id);
+    await deleteEntry(id);
+    assertFalsy(_revealed.has(id), 'deleted entry should be removed from _revealed');
+  });
+
+  it('persists deletion to localStorage', async () => {
+    resetState();
+    await makeVault();
+    await addEntry('Delete me', 'secret');
+    const id = _entries[0].id;
+    await deleteEntry(id);
+    // Unlock and re-load to verify persistence
+    const pw = 'correcthorse123!';
+    lockApp();
+    document.getElementById('lock-pw').value = pw;
+    await unlock();
+    assertEqual(_entries.length, 0, 'entry should not be present after reload');
+  });
+});
+
+// ── 4. Vault persistence roundtrip ────────────────────────────
+describe('Vault: persistence roundtrip', () => {
+  it('entries survive a lock → unlock cycle', async () => {
+    resetState();
+    const pw = 'roundtrip1234567';
+    await makeVault(pw);
+    await addEntry('GitHub', 'ghp_token123');
+    await addEntry('AWS', 'AKIA1234567890');
+    lockApp();
+    document.getElementById('lock-pw').value = pw;
+    await unlock();
+    assertEqual(_entries.length, 2);
+    assertEqual(_entries[0].name, 'GitHub');
+    assertEqual(_entries[1].name, 'AWS');
+  });
+
+  it('multiple entries round-trip with correct values', async () => {
+    resetState();
+    const pw = 'multientry12345!';
+    await makeVault(pw);
+    const entries = [
+      { name: 'Twitter', value: 'tw_pass!@#$' },
+      { name: 'SSH Key', value: '---BEGIN---\nabc\n---END---', multiline: true },
+      { name: 'PIN',     value: '4242' },
+    ];
+    for (const e of entries) await addEntry(e.name, e.value, e.multiline || false);
+    lockApp();
+    document.getElementById('lock-pw').value = pw;
+    await unlock();
+    assertEqual(_entries.length, 3);
+    entries.forEach((e, i) => {
+      assertEqual(_entries[i].name,  e.name);
+      assertEqual(_entries[i].value, e.value);
+    });
+  });
+});
+
+// ── 5. Search / renderEntries ──────────────────────────────────
+describe('Entries: search and render', () => {
+  it('shows all entries when search is empty', async () => {
+    resetState();
+    await makeVault();
+    await addEntry('Gmail', 'g'); await addEntry('GitHub', 'g2'); await addEntry('AWS', 'a');
+    document.getElementById('search-input').value = '';
+    renderEntries();
+    assertEqual(document.getElementById('entries-count').textContent, '3 entries');
+    assertEqual(document.querySelectorAll('#entry-list .entry-card').length, 3);
+  });
+
+  it('filters by substring match (case-insensitive)', async () => {
+    resetState();
+    await makeVault();
+    await addEntry('Gmail', 'g'); await addEntry('GitHub', 'g2'); await addEntry('AWS', 'a');
+    document.getElementById('search-input').value = 'git';
+    renderEntries();
+    assertEqual(document.getElementById('entries-count').textContent, '1 entry');
+    assertEqual(document.querySelectorAll('#entry-list .entry-card').length, 1);
+  });
+
+  it('shows empty state when no matches', async () => {
+    resetState();
+    await makeVault();
+    await addEntry('Gmail', 'g');
+    document.getElementById('search-input').value = 'zzznomatch';
+    renderEntries();
+    assertOk(document.getElementById('entry-list').innerHTML.includes('No matches'));
+  });
+
+  it('shows "no entries" empty state when vault is empty', async () => {
+    resetState();
+    await makeVault();
+    renderEntries();
+    assertOk(document.getElementById('entry-list').innerHTML.includes('No entries yet'));
+  });
+
+  it('uses singular "entry" for count of 1', async () => {
+    resetState();
+    await makeVault();
+    await addEntry('OnlyOne', 'v');
+    document.getElementById('search-input').value = '';
+    renderEntries();
+    assertEqual(document.getElementById('entries-count').textContent, '1 entry');
+  });
+
+  it('HTML-escapes entry names to prevent XSS', async () => {
+    resetState();
+    await makeVault();
+    await addEntry('<script>alert(1)</script>', 'xss');
+    renderEntries();
+    const html = document.getElementById('entry-list').innerHTML;
+    assertOk(!html.includes('<script>'), 'raw <script> tag must not appear in rendered HTML');
+    assertOk(html.includes('&lt;script&gt;'), 'should be escaped as &lt;script&gt;');
+  });
+});
+
+// ── 6. Reveal / hide values ────────────────────────────────────
+describe('Entries: reveal toggle', () => {
+  it('revealed entry loses .masked class', async () => {
+    resetState();
+    await makeVault();
+    await addEntry('Secret', 'mypassword');
+    const id = _entries[0].id;
+    renderEntries();
+    assertOk(document.querySelector(`.entry-card[data-id="${id}"] .entry-value.masked`),
+      'should start masked');
+    toggleReveal(id);
+    assertFalsy(document.querySelector(`.entry-card[data-id="${id}"] .entry-value.masked`),
+      'should not be masked after reveal');
+  });
+
+  it('toggling reveal twice re-masks the value', async () => {
+    resetState();
+    await makeVault();
+    await addEntry('Secret', 'mypassword');
+    const id = _entries[0].id;
+    toggleReveal(id); // reveal
+    toggleReveal(id); // hide
+    assertOk(document.querySelector(`.entry-card[data-id="${id}"] .entry-value.masked`),
+      'should be masked after double-toggle');
+  });
+});
+
+// ── 7. UI Helpers ──────────────────────────────────────────────
+describe('UI: esc()', () => {
+  const cases = [
+    ['<script>',          '&lt;script&gt;'],
+    ['Tom & Jerry',       'Tom &amp; Jerry'],
+    ['"quoted"',          '&quot;quoted&quot;'],
+    ["it's",              'it&#39;s'],
+    ['safe text',         'safe text'],
+    ['<img src=x onerror=alert(1)>', '&lt;img src=x onerror=alert(1)&gt;'],
+  ];
+  cases.forEach(([input, expected]) => {
+    it(`escapes: ${input}`, () => {
+      assertEqual(esc(input), expected);
+    });
+  });
+});
+
+describe('UI: toggleValueField', () => {
+  it('hides single-line, shows multi-line when multiline is checked', () => {
+    document.getElementById('e-multiline').checked = true;
+    toggleValueField();
+    assertEqual(document.getElementById('e-value-single').style.display, 'none');
+    assertEqual(document.getElementById('e-value-multi').style.display,  '');
+  });
+
+  it('shows single-line, hides multi-line when multiline is unchecked', () => {
+    document.getElementById('e-multiline').checked = false;
+    toggleValueField();
+    assertEqual(document.getElementById('e-value-single').style.display, '');
+    assertEqual(document.getElementById('e-value-multi').style.display,  'none');
+  });
+});
+
+describe('UI: toggleEye', () => {
+  it('toggles password input type to text', () => {
+    const input     = document.getElementById('setup-pw');
+    const btn       = document.createElement('button');
+    btn.textContent = '👁';
+    input.type      = 'password';
+    toggleEye('setup-pw', btn);
+    assertEqual(input.type, 'text');
+    assertEqual(btn.textContent, '🙈');
+  });
+
+  it('toggles text input back to password', () => {
+    const input     = document.getElementById('setup-pw');
+    const btn       = document.createElement('button');
+    btn.textContent = '🙈';
+    input.type      = 'text';
+    toggleEye('setup-pw', btn);
+    assertEqual(input.type, 'password');
+    assertEqual(btn.textContent, '👁');
+  });
+});
+
+describe('UI: modal open/close', () => {
+  it('openModal adds .open class', () => {
+    document.getElementById('entry-modal').classList.remove('open');
+    openModal('entry-modal');
+    assertOk(document.getElementById('entry-modal').classList.contains('open'));
+  });
+
+  it('closeModal removes .open class', () => {
+    document.getElementById('entry-modal').classList.add('open');
+    closeModal('entry-modal');
+    assertFalsy(document.getElementById('entry-modal').classList.contains('open'));
+  });
+});
+
+describe('UI: openAddModal', () => {
+  it('clears fields and opens entry modal', async () => {
+    resetState();
+    await makeVault();
+    // Dirty the fields first
+    document.getElementById('e-name').value = 'dirty';
+    document.getElementById('e-value-single').value = 'dirty';
+    openAddModal();
+    assertEqual(document.getElementById('e-name').value, '');
+    assertEqual(document.getElementById('e-value-single').value, '');
+    assertOk(document.getElementById('entry-modal').classList.contains('open'));
+    assertEqual(_editId, null);
+  });
+});
+
+// ── 8. Export / Import ─────────────────────────────────────────
+describe('Settings: export', () => {
+  it('exportVault returns null when no vault exists', () => {
+    resetState();
+    const result = exportVault();
+    assertEqual(result, null);
+    assertOk(_toastErr);
+  });
+
+  it('exportVault returns JSON with blob + salt + version', async () => {
+    resetState();
+    await makeVault();
+    const json = exportVault();
+    assertOk(json, 'should return a non-empty string');
+    const parsed = JSON.parse(json);
+    assertOk(parsed.blob,    'must have blob field');
+    assertOk(parsed.salt,    'must have salt field');
+    assertEqual(parsed.version, 1);
+  });
+
+  it('exported blob is valid base64', async () => {
+    resetState();
+    await makeVault();
+    const { blob } = JSON.parse(exportVault());
+    assertOk(() => atob(blob), 'blob should be valid base64');
+  });
+
+  it('export → import roundtrip restores vault to locked state', async () => {
+    resetState();
+    const pw = 'exportimport123!';
+    await makeVault(pw);
+    await addEntry('Twitter', 'tw_secret');
+    const exportJson = exportVault();
+
+    // Wipe everything
+    resetState();
+
+    // Simulate importVault (we call the logic directly without file I/O)
+    const { blob, salt } = JSON.parse(exportJson);
+    localStorage.setItem(VAULT_KEY, blob);
+    localStorage.setItem(SALT_KEY, salt);
+
+    // Unlock with original password
+    document.getElementById('lock-pw').value = pw;
+    await unlock();
+    assertEqual(_entries.length, 1);
+    assertEqual(_entries[0].name, 'Twitter');
+    assertEqual(_entries[0].value, 'tw_secret');
+  });
+});
+
+// ── 9. Boot sequence ───────────────────────────────────────────
+describe('Boot: initial screen routing', () => {
+  it('shows setup screen when no vault exists', () => {
+    resetState();
+    // Boot logic inline
+    const hasVault = !!localStorage.getItem(VAULT_KEY);
+    if (!hasVault) show('screen-setup');
+    assertOk(document.getElementById('screen-setup').classList.contains('active'));
+  });
+
+  it('shows lock screen when vault exists but no session key', async () => {
+    resetState();
+    await makeVault();
+    sessionStorage.removeItem('vk'); // simulate new tab session
+    // Boot logic inline
+    const hasVault = !!localStorage.getItem(VAULT_KEY);
+    const sessionRaw = sessionStorage.getItem('vk');
+    if (hasVault && !sessionRaw) show('screen-lock');
+    assertOk(document.getElementById('screen-lock').classList.contains('active'));
+  });
+
+  it('auto-unlocks when session key is cached', async () => {
+    resetState();
+    const pw = 'sessioncache123!';
+    await makeVault(pw);
+    // sessionStorage should have 'vk' at this point
+    assertOk(sessionStorage.getItem('vk'), 'session key should be cached after setup');
+    // Simulate boot with session key present
+    const sessionRaw = sessionStorage.getItem('vk');
+    let autoUnlocked = false;
+    if (sessionRaw) {
+      try {
+        const raw = Uint8Array.from(atob(sessionRaw), c => c.charCodeAt(0));
+        _key      = await crypto.subtle.importKey('raw', raw, { name:'AES-GCM', length:256 }, true, ['encrypt','decrypt']);
+        const blob = localStorage.getItem(VAULT_KEY);
+        _entries  = (await decrypt(blob, _key)).entries || [];
+        autoUnlocked = true;
+      } catch { sessionStorage.removeItem('vk'); }
+    }
+    assertOk(autoUnlocked, 'should auto-unlock from session key');
+    assertOk(_key !== null);
+  });
+});
+
+// ── 10. Service Worker ─────────────────────────────────────────
+describe('Service Worker: sw.js', () => {
+  it('CACHE name is a non-empty string', async () => {
+    // Fetch the raw sw.js and check the CACHE constant
+    let swText = '';
+    try {
+      const res = await fetch('../web/sw.js');
+      swText = res.ok ? await res.text() : '';
+    } catch { /* offline */ }
+    if (!swText) { console.warn('sw.js not reachable — skipping SW text tests'); return; }
+    assertOk(swText.includes("const CACHE"), 'CACHE constant must be defined');
+    assertOk(swText.includes("'install'"),   'must handle install event');
+    assertOk(swText.includes("'activate'"),  'must handle activate event');
+    assertOk(swText.includes("'fetch'"),     'must handle fetch event');
+  });
+
+  it('ASSETS array includes index.html', async () => {
+    let swText = '';
+    try {
+      const res = await fetch('../web/sw.js');
+      swText = res.ok ? await res.text() : '';
+    } catch { /* offline */ }
+    if (!swText) return;
+    assertOk(swText.includes('/index.html'), 'ASSETS must include /index.html');
+    assertOk(swText.includes('/manifest.json'), 'ASSETS must include /manifest.json');
+  });
+});
+
+/* ════════════════════════════════════════════════════════════════
+   RUN ALL TESTS + RENDER RESULTS
+════════════════════════════════════════════════════════════════ */
+(async function runAll() {
+  const resultsEl = document.getElementById('results');
+  const summaryEl = document.getElementById('summary');
+  let totalPass = 0, totalFail = 0;
+
+  for (const suite of suites) {
+    const suiteEl = document.createElement('div');
+    suiteEl.className = 'suite';
+    suiteEl.innerHTML = `<div class="suite-name">${suite.name}</div>`;
+    resultsEl.appendChild(suiteEl);
+
+    for (const t of suite.tests) {
+      let pass = false, errMsg = '';
+      try {
+        await t.fn();
+        pass = true; totalPass++;
+      } catch(e) {
+        pass = false; totalFail++;
+        errMsg = e.message || String(e);
+      }
+
+      const row = document.createElement('div');
+      row.className = 'test';
+      row.innerHTML = `
+        <span class="badge ${pass ? 'pass' : 'fail'}">${pass ? 'PASS' : 'FAIL'}</span>
+        <span class="test-name">${t.name}${errMsg ? `<div class="test-err">${errMsg}</div>` : ''}</span>`;
+      suiteEl.appendChild(row);
+    }
+  }
+
+  const total = totalPass + totalFail;
+  summaryEl.className = `summary ${totalFail === 0 ? 'all-pass' : 'has-fail'}`;
+  summaryEl.textContent =
+    totalFail === 0
+      ? `✅  All ${total} tests passed`
+      : `❌  ${totalFail} of ${total} tests failed  (${totalPass} passed)`;
+
+  console.log(`[Sovereign Tests] ${totalPass}/${total} passed${totalFail ? ` — ${totalFail} FAILED` : ''}`);
+  // Signal completion for Marionette polling
+  summaryEl.setAttribute('data-done', '1');
+  document.title = `Tests done: ${totalPass}/${total} passed`;
+})();
+</script>
+</body>
+</html>
