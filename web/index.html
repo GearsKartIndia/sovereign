@@ -843,7 +843,12 @@ async function saveEntry() {
   } else {
     _entries.push({ id: crypto.randomUUID(), name, value, multiline: isMulti, created: Date.now() });
   }
-  await saveVault();
+  try {
+    await saveVault();
+  } catch(e) {
+    toast('Save failed — ' + (e?.message || e), true);
+    return;
+  }
   closeModal('entry-modal');
   renderEntries();
   toast(_editId ? 'Entry updated' : 'Entry saved');

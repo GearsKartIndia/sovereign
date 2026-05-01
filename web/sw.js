@@ -14,8 +14,16 @@ self.addEventListener('activate', e => {
 });
 
 self.addEventListener('fetch', e => {
-  // Cache-first for app shell, network-first for everything else
   if (ASSETS.some(a => e.request.url.endsWith(a))) {
-    e.respondWith(caches.match(e.request).then(r => r || fetch(e.request)));
+    // Network-first: always fetch fresh app shell; fall back to cache when offline
+    e.respondWith(
+      fetch(e.request)
+        .then(res => {
+          const copy = res.clone();
+          caches.open(CACHE).then(c => c.put(e.request, copy));
+          return res;
+        })
+        .catch(() => caches.match(e.request))
+    );
   }
 });
