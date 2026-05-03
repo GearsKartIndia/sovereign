@@ -9,6 +9,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Sovereign by Copps">
 <meta name="description" content="Free Password Store — Truly local. No servers, no accounts.">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; connect-src 'self'; worker-src 'self'; manifest-src 'self'; base-uri 'self'; form-action 'none';">
 <link rel="manifest" href="manifest.json">
 <title>Sovereign by Copps</title>
 <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=DM+Mono:wght@400;500&family=Geist:wght@300;400;500;600&display=swap" rel="stylesheet">
@@ -796,11 +797,14 @@ function toggleReveal(id) {
   }, 10);
 }
 
+let _clipTimer;
 function copyEntry(id) {
   const e = _entries.find(x => x.id === id);
   if (!e) return;
   navigator.clipboard.writeText(e.value).catch(() => {});
-  toast('Copied to clipboard');
+  toast('Copied — clears in 30s');
+  clearTimeout(_clipTimer);
+  _clipTimer = setTimeout(() => navigator.clipboard.writeText('').catch(() => {}), 30000);
 }
 
 function openAddModal() {
@@ -980,6 +984,11 @@ document.addEventListener('keydown', e => {
   }
   if (e.key === 'Enter' && document.getElementById('screen-lock')?.classList.contains('active')) unlock();
   if (e.key === 'Enter' && document.getElementById('screen-setup')?.classList.contains('active')) setupVault();
+});
+
+/* Auto-lock when tab is hidden */
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden && _key) lockApp();
 });
 
 /* Close modal on overlay click */
