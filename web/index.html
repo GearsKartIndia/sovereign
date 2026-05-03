@@ -458,7 +458,7 @@ input.has-eye { padding-right: 2.5rem; }
   <div class="search-bar">
     <div class="search-wrap">
       <span class="search-icon">🔍</span>
-      <input type="text" id="search-input" placeholder="Search entries…" oninput="renderEntries()">
+      <input type="text" id="search-input" placeholder="Search entries…" oninput="scheduleRender()">
     </div>
   </div>
 
@@ -741,15 +741,28 @@ async function saveVault() {
    ENTRIES — CRUD
 ══════════════════════════════════════════════ */
 let _revealed = new Set();
+let _renderTimer;
+function scheduleRender() {
+  clearTimeout(_renderTimer);
+  _renderTimer = setTimeout(renderEntries, 150);
+}
+
+const MAX_ENTRIES = 5000;
+const MAX_VISIBLE = 100;
 
 function renderEntries() {
-  const q    = (document.getElementById('search-input')?.value || '').toLowerCase();
-  const list = document.getElementById('entry-list');
+  const q       = (document.getElementById('search-input')?.value || '').toLowerCase();
+  const list    = document.getElementById('entry-list');
   const filtered = _entries.filter(e => e.name.toLowerCase().includes(q));
-  document.getElementById('entries-count').textContent =
-    filtered.length + ' entr' + (filtered.length === 1 ? 'y' : 'ies');
+  const visible  = filtered.slice(0, MAX_VISIBLE);
+  const total    = filtered.length;
 
-  if (!filtered.length) {
+  document.getElementById('entries-count').textContent =
+    total === 0          ? '' :
+    total <= MAX_VISIBLE ? total + ' entr' + (total === 1 ? 'y' : 'ies') :
+                           `First ${MAX_VISIBLE} of ${total.toLocaleString()} — type more to narrow`;
+
+  if (!total) {
     list.innerHTML = `<div class="empty-state">
       <div class="empty-icon">${_entries.length ? '🔍' : '🗝️'}</div>
       <div class="empty-title">${_entries.length ? 'No matches' : 'No entries yet'}</div>
@@ -758,7 +771,7 @@ function renderEntries() {
     return;
   }
 
-  list.innerHTML = filtered.map(e => {
+  list.innerHTML = visible.map(e => {
     const isOpen     = document.querySelector(`.entry-card[data-id="${e.id}"]`)?.classList.contains('open');
     const isRevealed = _revealed.has(e.id);
     const isMulti    = e.multiline;
@@ -845,6 +858,10 @@ async function saveEntry() {
     : document.getElementById('e-value-single').value.trim();
   if (!name)  { toast('Name is required', true); return; }
   if (!value) { toast('Value is required', true); return; }
+  if (!_editId && _entries.length >= MAX_ENTRIES) {
+    toast(`Vault is full — maximum ${MAX_ENTRIES.toLocaleString()} entries`, true);
+    return;
+  }
 
   if (_editId) {
     const idx = _entries.findIndex(x => x.id === _editId);

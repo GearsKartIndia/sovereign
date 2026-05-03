@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sovereign — Test Vault Generator</title>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: system-ui, sans-serif; background: #0e0e0e; color: #e0e0e0;
+  padding: 2rem; line-height: 1.6; max-width: 640px; margin: 0 auto; }
+h1 { font-size: 1.5rem; margin-bottom: 0.25rem; color: #fff; }
+.sub { font-size: 0.875rem; color: #666; margin-bottom: 2rem; }
+.cred { background: #1a1a1a; border: 1px solid #333; border-radius: 8px;
+  padding: 1rem 1.25rem; margin-bottom: 1.5rem; }
+.cred-label { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.08em;
+  color: #666; margin-bottom: 0.375rem; }
+.cred-value { font-family: monospace; font-size: 1.125rem; color: #f0c060;
+  letter-spacing: 0.04em; }
+.btn { display: inline-block; background: #fff; color: #0e0e0e; border: none;
+  border-radius: 8px; padding: 0.75rem 1.5rem; font-size: 1rem; font-weight: 600;
+  cursor: pointer; transition: background 0.15s; }
+.btn:hover { background: #ccc; }
+.btn:disabled { background: #333; color: #666; cursor: not-allowed; }
+.status { margin-top: 1.25rem; font-size: 0.9rem; color: #aaa; min-height: 1.5rem; }
+.progress { height: 4px; background: #222; border-radius: 2px; margin-top: 0.75rem;
+  overflow: hidden; display: none; }
+.progress-bar { height: 100%; background: #b8935a; border-radius: 2px;
+  transition: width 0.3s; width: 0%; }
+.note { margin-top: 2rem; font-size: 0.8125rem; color: #555; border-top: 1px solid #1a1a1a;
+  padding-top: 1rem; }
+code { font-family: monospace; background: #1a1a1a; padding: 1px 5px; border-radius: 3px;
+  font-size: 0.875em; }
+</style>
+</head>
+<body>
+<h1>Sovereign — Test Vault Generator</h1>
+<p class="sub">Generates a 5,000-entry <code>.vaultbak</code> file you can import into Sovereign.</p>
+
+<div class="cred">
+  <div class="cred-label">Master password for the generated vault</div>
+  <div class="cred-value">TestVault-5000!</div>
+</div>
+
+<button class="btn" id="gen-btn" onclick="generate()">Generate &amp; Download</button>
+<div class="progress" id="progress"><div class="progress-bar" id="progress-bar"></div></div>
+<div class="status" id="status">Ready.</div>
+
+<div class="note">
+  <p>The file is encrypted with AES-256-GCM using the password above — it is safe to share.<br>
+  To import: open Sovereign → Settings → Import backup → select the downloaded file → unlock with <code>TestVault-5000!</code></p>
+</div>
+
+<script>
+const MASTER_PASSWORD = 'TestVault-5000!';
+const PBKDF2_ITER     = 310000;
+
+/* ── Crypto (identical to app) ─────────────────────────────────── */
+async function deriveKey(password, salt) {
+  const enc = new TextEncoder();
+  const raw = await crypto.subtle.importKey('raw', enc.encode(password), 'PBKDF2', false, ['deriveKey']);
+  return crypto.subtle.deriveKey(
+    { name: 'PBKDF2', salt, iterations: PBKDF2_ITER, hash: 'SHA-256' },
+    raw, { name: 'AES-GCM', length: 256 }, true, ['encrypt', 'decrypt']
+  );
+}
+
+async function encrypt(data, key) {
+  const iv  = crypto.getRandomValues(new Uint8Array(12));
+  const enc = new TextEncoder();
+  const ct  = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, enc.encode(JSON.stringify(data)));
+  const out = new Uint8Array(12 + ct.byteLength);
+  out.set(iv);
+  out.set(new Uint8Array(ct), 12);
+  let s = '';
+  for (let i = 0; i < out.length; i++) s += String.fromCharCode(out[i]);
+  return btoa(s);
+}
+
+function toB64(arr) {
+  let s = '';
+  for (let i = 0; i < arr.length; i++) s += String.fromCharCode(arr[i]);
+  return btoa(s);
+}
+
+/* ── Entry generation ──────────────────────────────────────────── */
+const CATEGORIES = {
+  'Email':         ['Gmail', 'Yahoo Mail', 'Outlook', 'ProtonMail', 'iCloud Mail', 'Zoho Mail', 'Tutanota', 'FastMail', 'HEY Email', 'AOL Mail'],
+  'Social':        ['Twitter', 'Facebook', 'Instagram', 'LinkedIn', 'TikTok', 'Reddit', 'Discord', 'Snapchat', 'Pinterest', 'Mastodon'],
+  'Developer':     ['GitHub', 'GitLab', 'Bitbucket', 'npm Registry', 'Docker Hub', 'Stack Overflow', 'CodePen', 'Replit', 'Heroku', 'Netlify'],
+  'Finance':       ['Chase Bank', 'Bank of America', 'PayPal', 'Stripe', 'Coinbase', 'Venmo', 'Robinhood', 'Wells Fargo', 'Citi Bank', 'Square'],
+  'Cloud':         ['AWS Console', 'Google Cloud', 'Azure Portal', 'Cloudflare', 'Vercel', 'DigitalOcean', 'Railway', 'Fly.io', 'Linode', 'Render'],
+  'Shopping':      ['Amazon', 'eBay', 'Etsy', 'Target', 'Walmart', 'Best Buy', 'AliExpress', 'Shopify', 'Instacart', 'Wayfair'],
+  'Work':          ['Slack', 'Zoom', 'Notion', 'Jira', 'Salesforce', 'HubSpot', 'Asana', 'Monday.com', 'Trello', 'Airtable'],
+  'Security':      ['1Password', 'Okta', 'Duo Security', 'Auth0', 'NordVPN', 'ExpressVPN', 'Bitwarden', 'Mullvad VPN', 'Tailscale', 'Authy'],
+  'Entertainment': ['Netflix', 'Spotify', 'Disney+', 'HBO Max', 'Apple TV+', 'Hulu', 'Peacock', 'YouTube Premium', 'Crunchyroll', 'Twitch'],
+  'Misc':          ['Dropbox', 'Evernote', 'Figma', 'Canva', 'Miro', 'OpenAI', 'Anthropic API', 'Typeform', 'Calendly', 'Zapier'],
+};
+// 10 categories × 10 services × 50 entries = 5,000
+
+function generateEntries() {
+  const entries = [];
+  let t = Date.now() - 5000 * 3_600_000;
+
+  for (const [cat, services] of Object.entries(CATEGORIES)) {
+    for (const svc of services) {
+      const slug = svc.toLowerCase().replace(/[^a-z0-9]/g, '-').replace(/-+/g, '-');
+      const catTag = cat.slice(0, 2).toUpperCase();
+
+      for (let i = 1; i <= 20; i++) {
+        entries.push({ id: crypto.randomUUID(), name: `${svc} — Personal #${i}`,
+          value: `personal${i}@${slug}.example.com\nP@ss${catTag}${i}word!24`, multiline: false, created: (t += 3_600_000) });
+      }
+      for (let i = 1; i <= 20; i++) {
+        entries.push({ id: crypto.randomUUID(), name: `${svc} — Work #${i}`,
+          value: `work.user${i}@corp.example.com\nW0rk${catTag}${i}P@ss!24`, multiline: false, created: (t += 3_600_000) });
+      }
+      for (let i = 1; i <= 5; i++) {
+        entries.push({ id: crypto.randomUUID(), name: `${svc} — Client #${i}`,
+          value: `client${i}@project${i}.example.com\nCl!ent${catTag}${i}P@ss24`, multiline: false, created: (t += 3_600_000) });
+      }
+      for (let i = 1; i <= 5; i++) {
+        entries.push({ id: crypto.randomUUID(), name: `${svc} — API Key #${i}`,
+          value: `API_KEY=sk-${slug}-${i}-${'abcdef0123456789'.repeat(2)}\nAPI_SECRET=secret_${slug}_${i}_${'xyz0987654321'.repeat(1)}\nENDPOINT=https://api.${slug}.example.com/v${i}`,
+          multiline: true, created: (t += 3_600_000) });
+      }
+    }
+  }
+  return entries;
+}
+
+/* ── Generator ─────────────────────────────────────────────────── */
+function setStatus(msg, pct) {
+  document.getElementById('status').textContent = msg;
+  const bar  = document.getElementById('progress-bar');
+  const wrap = document.getElementById('progress');
+  if (pct !== undefined) {
+    wrap.style.display = 'block';
+    bar.style.width = pct + '%';
+  }
+}
+
+async function generate() {
+  const btn = document.getElementById('gen-btn');
+  btn.disabled = true;
+
+  setStatus('Building 5,000 entries…', 10);
+  await new Promise(r => setTimeout(r, 30)); // let UI paint
+  const entries = generateEntries();
+
+  setStatus(`Deriving key — ${PBKDF2_ITER.toLocaleString()} PBKDF2 iterations, takes ~3s…`, 30);
+  await new Promise(r => setTimeout(r, 30));
+  const salt = crypto.getRandomValues(new Uint8Array(32));
+  const key  = await deriveKey(MASTER_PASSWORD, salt);
+
+  setStatus('Encrypting vault…', 75);
+  await new Promise(r => setTimeout(r, 30));
+  const blob = await encrypt({ entries }, key);
+
+  setStatus('Preparing download…', 90);
+  await new Promise(r => setTimeout(r, 30));
+
+  const payload = JSON.stringify({ blob, salt: toB64(salt), version: 1 });
+  const a       = document.createElement('a');
+  a.href        = URL.createObjectURL(new Blob([payload], { type: 'application/octet-stream' }));
+  a.download    = `sovereign-test-5000-${new Date().toISOString().slice(0, 10)}.vaultbak`;
+  a.click();
+
+  setStatus(`✅ Done — ${entries.length.toLocaleString()} entries. Import the file, then unlock with: TestVault-5000!`, 100);
+  btn.disabled = false;
+}
+</script>
+</body>
+</html>
