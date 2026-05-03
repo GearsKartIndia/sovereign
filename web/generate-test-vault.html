@@ -54,13 +54,29 @@ code { font-family: monospace; background: #1a1a1a; padding: 1px 5px; border-rad
 const MASTER_PASSWORD = 'TestVault-5000!';
 const PBKDF2_ITER     = 310000;
 
-/* ── Crypto (identical to app) ─────────────────────────────────── */
-async function deriveKey(password, salt) {
-  const enc = new TextEncoder();
-  const raw = await crypto.subtle.importKey('raw', enc.encode(password), 'PBKDF2', false, ['deriveKey']);
+/* ── Crypto (matches app v2 scheme: PBKDF2 → deriveBits + HKDF) ── */
+function toB64(arr) {
+  let s = '';
+  for (let i = 0; i < arr.length; i++) s += String.fromCharCode(arr[i]);
+  return btoa(s);
+}
+
+async function deriveCredentials(password, gsalt) {
+  const enc    = new TextEncoder();
+  const rawKey = await crypto.subtle.importKey('raw', enc.encode(password), 'PBKDF2', false, ['deriveBits']);
+  const bits   = await crypto.subtle.deriveBits(
+    { name: 'PBKDF2', salt: gsalt, iterations: PBKDF2_ITER, hash: 'SHA-256' },
+    rawKey, 384
+  );
+  const bytes = new Uint8Array(bits);
+  return { vaultId: toB64(bytes.slice(0, 16)), baseKey: bytes.slice(16, 48) };
+}
+
+async function deriveEncKey(baseKeyBytes, vsalt) {
+  const km = await crypto.subtle.importKey('raw', baseKeyBytes, 'HKDF', false, ['deriveKey']);
   return crypto.subtle.deriveKey(
-    { name: 'PBKDF2', salt, iterations: PBKDF2_ITER, hash: 'SHA-256' },
-    raw, { name: 'AES-GCM', length: 256 }, true, ['encrypt', 'decrypt']
+    { name: 'HKDF', hash: 'SHA-256', salt: vsalt, info: new TextEncoder().encode('sovereign-v1-enc') },
+    km, { name: 'AES-GCM', length: 256 }, true, ['encrypt', 'decrypt']
   );
 }
 
@@ -73,12 +89,6 @@ async function encrypt(data, key) {
   out.set(new Uint8Array(ct), 12);
   let s = '';
   for (let i = 0; i < out.length; i++) s += String.fromCharCode(out[i]);
-  return btoa(s);
-}
-
-function toB64(arr) {
-  let s = '';
-  for (let i = 0; i < arr.length; i++) s += String.fromCharCode(arr[i]);
   return btoa(s);
 }
 
@@ -149,17 +159,19 @@ async function generate() {
 
   setStatus(`Deriving key — ${PBKDF2_ITER.toLocaleString()} PBKDF2 iterations, takes ~3s…`, 30);
   await new Promise(r => setTimeout(r, 30));
-  const salt = crypto.getRandomValues(new Uint8Array(32));
-  const key  = await deriveKey(MASTER_PASSWORD, salt);
+  const gsalt = crypto.getRandomValues(new Uint8Array(32)); // ephemeral; not stored
+  const vsalt = crypto.getRandomValues(new Uint8Array(32));
+  const { baseKey } = await deriveCredentials(MASTER_PASSWORD, gsalt);
+  const key = await deriveEncKey(baseKey, vsalt);
 
   setStatus('Encrypting vault…', 75);
   await new Promise(r => setTimeout(r, 30));
-  const blob = await encrypt({ entries }, key);
+  const data = await encrypt({ entries }, key);
 
   setStatus('Preparing download…', 90);
   await new Promise(r => setTimeout(r, 30));
 
-  const payload = JSON.stringify({ blob, salt: toB64(salt), version: 1 });
+  const payload = JSON.stringify({ vsalt: toB64(vsalt), data, version: 2 });
   const a       = document.createElement('a');
   a.href        = URL.createObjectURL(new Blob([payload], { type: 'application/octet-stream' }));
   a.download    = `sovereign-test-5000-${new Date().toISOString().slice(0, 10)}.vaultbak`;

@@ -386,9 +386,10 @@ input.has-eye { padding-right: 2.5rem; }
 </head>
 <body>
 
-<!-- ═══ SETUP SCREEN (first launch) ═══ -->
+<!-- ═══ SETUP SCREEN (first launch / add account) ═══ -->
 <div id="screen-setup" class="screen active">
   <div class="lock-card" style="margin:auto">
+    <button class="btn btn-ghost btn-sm" id="setup-back-btn" onclick="backToLock()" style="display:none;margin-bottom:1rem">← Back</button>
     <div class="lock-logo">Sovereign <span>by Copps</span></div>
     <div class="lock-tagline">Free Password Store — Truly local.</div>
 
@@ -444,6 +445,8 @@ input.has-eye { padding-right: 2.5rem; }
     <div class="security-note mt">
       🔐 All data is encrypted on this device. Nothing is sent to any server.
     </div>
+
+    <button class="btn btn-ghost" style="width:100%;margin-top:0.875rem;font-size:0.875rem" onclick="showAddAccount()">+ Add another account</button>
   </div>
 </div>
 
@@ -525,7 +528,7 @@ input.has-eye { padding-right: 2.5rem; }
       <button class="btn btn-ghost" style="width:100%;margin-bottom:0.625rem" onclick="document.getElementById('import-file').click()">
         📥 Import backup
       </button>
-      <input type="file" id="import-file" accept=".sovereignbak" style="display:none" onchange="importVault(this)">
+      <input type="file" id="import-file" accept=".vaultbak" style="display:none" onchange="importVault(this)">
 
       <div class="danger-zone">
         <p class="text-sm" style="margin-bottom:0.625rem;color:var(--red)">Danger zone</p>
@@ -537,26 +540,73 @@ input.has-eye { padding-right: 2.5rem; }
   </div>
 </div>
 
+<!-- ═══ IMPORT PASSWORD MODAL ═══ -->
+<div class="modal-overlay" id="import-pw-modal">
+  <div class="modal">
+    <div class="modal-handle"></div>
+    <div class="modal-header">
+      <span class="modal-title">Unlock Backup</span>
+      <button class="modal-close" onclick="closeModal('import-pw-modal')">✕</button>
+    </div>
+    <div class="modal-body">
+      <p class="text-sm" style="margin-bottom:1rem">Enter the master password that was used to create this backup.</p>
+      <div class="field">
+        <label class="field-label">Backup password</label>
+        <div class="input-wrap">
+          <input type="password" id="import-pw-input" class="has-eye" placeholder="Master password" autocomplete="current-password">
+          <button class="input-eye" onclick="toggleEye('import-pw-input',this)">👁</button>
+        </div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeModal('import-pw-modal')" style="flex:1">Cancel</button>
+      <button class="btn btn-primary" onclick="completeImport()" style="flex:2">Import</button>
+    </div>
+  </div>
+</div>
+
 <!-- ═══ TOAST ═══ -->
 <div class="toast" id="toast"></div>
 
 <script>
 /* ══════════════════════════════════════════════
-   CRYPTO LAYER — AES-256-GCM + PBKDF2
+   CRYPTO LAYER — AES-256-GCM + PBKDF2 + HKDF
 ══════════════════════════════════════════════ */
-const PBKDF2_ITER = 310000; // NIST recommended 2024
-const SALT_KEY    = 'vault_salt';
-const VAULT_KEY   = 'vault_data';
-const BIO_KEY     = 'vault_bio_cred';
+const PBKDF2_ITER = 310000;
+const GSALT_KEY   = 'sv_gsalt';   // global 32-byte device salt (base64)
+const VAULTS_KEY  = 'sv_vaults';  // JSON map: vaultId → { vsalt, data }
 
-async function deriveKey(password, salt) {
+/* Single PBKDF2 call → 48 bytes: [0-15] = vaultId, [16-47] = baseKey material */
+async function deriveCredentials(password) {
+  const enc    = new TextEncoder();
+  const gsalt  = getGlobalSalt();
+  const rawKey = await crypto.subtle.importKey('raw', enc.encode(password), 'PBKDF2', false, ['deriveBits']);
+  const bits   = await crypto.subtle.deriveBits(
+    { name:'PBKDF2', salt: gsalt, iterations: PBKDF2_ITER, hash:'SHA-256' },
+    rawKey, 384
+  );
+  const bytes   = new Uint8Array(bits);
+  const vaultId = toB64(bytes.slice(0, 16));
+  const baseKey = bytes.slice(16, 48);
+  return { vaultId, baseKey };
+}
+
+/* HKDF: baseKey + per-vault salt → final AES-256-GCM encryption key */
+async function deriveEncKey(baseKeyBytes, vsalt) {
+  const km = await crypto.subtle.importKey('raw', baseKeyBytes, 'HKDF', false, ['deriveKey']);
+  return crypto.subtle.deriveKey(
+    { name:'HKDF', hash:'SHA-256', salt: vsalt, info: new TextEncoder().encode('sovereign-v1-enc') },
+    km, { name:'AES-GCM', length:256 }, true, ['encrypt','decrypt']
+  );
+}
+
+/* Legacy single-user key derivation (used only for migration) */
+async function deriveKeyLegacy(password, salt) {
   const enc = new TextEncoder();
   const raw = await crypto.subtle.importKey('raw', enc.encode(password), 'PBKDF2', false, ['deriveKey']);
   return crypto.subtle.deriveKey(
     { name:'PBKDF2', salt, iterations: PBKDF2_ITER, hash:'SHA-256' },
-    raw,
-    { name:'AES-GCM', length:256 },
-    true, ['encrypt','decrypt']
+    raw, { name:'AES-GCM', length:256 }, true, ['encrypt','decrypt']
   );
 }
 
@@ -580,22 +630,31 @@ async function decrypt(b64, key) {
   return JSON.parse(new TextDecoder().decode(pt));
 }
 
-function getSalt() {
-  let s = localStorage.getItem(SALT_KEY);
-  if (!s) {
-    const arr = crypto.getRandomValues(new Uint8Array(32));
-    s = btoa(String.fromCharCode(...arr));
-    localStorage.setItem(SALT_KEY, s);
-  }
-  return Uint8Array.from(atob(s), c => c.charCodeAt(0));
+function toB64(arr) {
+  let s = '';
+  for (let i = 0; i < arr.length; i++) s += String.fromCharCode(arr[i]);
+  return btoa(s);
+}
+function fromB64(b64) { return Uint8Array.from(atob(b64), c => c.charCodeAt(0)); }
+
+function getGlobalSalt() {
+  let s = localStorage.getItem(GSALT_KEY);
+  if (!s) { s = toB64(crypto.getRandomValues(new Uint8Array(32))); localStorage.setItem(GSALT_KEY, s); }
+  return fromB64(s);
+}
+
+function getVaults() {
+  try { return JSON.parse(localStorage.getItem(VAULTS_KEY) || '{}'); } catch { return {}; }
 }
 
 /* ══════════════════════════════════════════════
    APP STATE
 ══════════════════════════════════════════════ */
-let _key     = null;   // CryptoKey — in-memory only, never persisted
-let _entries = [];     // plaintext entries in memory
+let _key     = null;
+let _entries = [];
 let _editId  = null;
+let _vaultId = null;
+let _vsalt   = null;
 
 /* ══════════════════════════════════════════════
    SETUP
@@ -610,10 +669,23 @@ async function setupVault() {
   const pw2 = document.getElementById('setup-pw2').value;
   if (pw.length < 10) { toast('Password must be at least 10 characters', true); return; }
   if (pw !== pw2)     { toast('Passwords do not match', true); return; }
-  const salt = getSalt();
-  _key       = await deriveKey(pw, salt);
-  _entries   = [];
+
+  const { vaultId, baseKey } = await deriveCredentials(pw);
+
+  if (getVaults()[vaultId]) {
+    toast('A vault with this password already exists — try unlocking instead', true);
+    return;
+  }
+
+  const vsalt = crypto.getRandomValues(new Uint8Array(32));
+  const key   = await deriveEncKey(baseKey, vsalt);
+
+  _key = key; _vaultId = vaultId; _vsalt = vsalt; _entries = [];
   await saveVault();
+
+  document.getElementById('setup-pw').value  = '';
+  document.getElementById('setup-pw2').value = '';
+  document.getElementById('setup-back-btn').style.display = 'none';
   show('screen-app');
   renderEntries();
   toast('Sovereign vault created ✓');
@@ -626,19 +698,59 @@ async function unlock() {
   const pw = document.getElementById('lock-pw').value;
   if (!pw) { toast('Enter your master password', true); return; }
   try {
-    const salt = getSalt();
-    const key  = await deriveKey(pw, salt);
-    const blob = localStorage.getItem(VAULT_KEY);
-    const data = await decrypt(blob, key);
-    _key     = key;
-    _entries = data.entries || [];
-    document.getElementById('lock-pw').value = '';
-    show('screen-app');
-    renderEntries();
-    toast('Unlocked ✓');
+    // Try new multi-user vaults first
+    const vaults = getVaults();
+    if (Object.keys(vaults).length > 0) {
+      const { vaultId, baseKey } = await deriveCredentials(pw);
+      const slot = vaults[vaultId];
+      if (slot) {
+        const vsalt = fromB64(slot.vsalt);
+        const key   = await deriveEncKey(baseKey, vsalt);
+        const data  = await decrypt(slot.data, key);
+        _key = key; _vaultId = vaultId; _vsalt = vsalt;
+        _entries = data.entries || [];
+        document.getElementById('lock-pw').value = '';
+        show('screen-app'); renderEntries();
+        toast('Unlocked ✓');
+        try { await cacheKeyInSession(_key); } catch {}
+        return;
+      }
+    }
+    // Fall back to legacy single-user vault (migration path)
+    const legacyBlob = localStorage.getItem('vault_data');
+    if (legacyBlob) { await unlockAndMigrateLegacy(pw); return; }
+    toast('Wrong password', true);
   } catch {
     toast('Wrong password', true);
   }
+}
+
+async function unlockAndMigrateLegacy(pw) {
+  const saltRaw   = localStorage.getItem('vault_salt');
+  const legacySalt = fromB64(saltRaw);
+  const legacyKey = await deriveKeyLegacy(pw, legacySalt);
+  const data      = await decrypt(localStorage.getItem('vault_data'), legacyKey);
+
+  const { vaultId, baseKey } = await deriveCredentials(pw);
+  const vsalt  = crypto.getRandomValues(new Uint8Array(32));
+  const key    = await deriveEncKey(baseKey, vsalt);
+  const blob   = await encrypt(data, key);
+
+  const vaults = getVaults();
+  vaults[vaultId] = { vsalt: toB64(vsalt), data: blob };
+  localStorage.setItem(VAULTS_KEY, JSON.stringify(vaults));
+
+  // Clean up legacy keys
+  localStorage.removeItem('vault_data');
+  localStorage.removeItem('vault_salt');
+  localStorage.removeItem('vault_bio_cred');
+
+  _key = key; _vaultId = vaultId; _vsalt = vsalt;
+  _entries = data.entries || [];
+  document.getElementById('lock-pw').value = '';
+  show('screen-app'); renderEntries();
+  toast('Vault migrated and unlocked ✓');
+  try { await cacheKeyInSession(_key); } catch {}
 }
 
 /* ══════════════════════════════════════════════
@@ -650,91 +762,93 @@ function webAuthnAvailable() {
 
 async function registerBiometric() {
   if (!webAuthnAvailable()) { toast('Passkeys not supported on this browser', true); return; }
-  if (!_key) { toast('Unlock the vault first', true); return; }
+  if (!_key || !_vaultId) { toast('Unlock the vault first', true); return; }
   try {
-    // We store a random challenge in localStorage; the passkey just proves identity
     const cred = await navigator.credentials.create({
       publicKey: {
         challenge: crypto.getRandomValues(new Uint8Array(32)),
         rp: { name: 'Sovereign by Copps', id: location.hostname || 'localhost' },
-        user: { id: new TextEncoder().encode('vault-user'), name: 'vault', displayName: 'Vault User' },
+        user: { id: new TextEncoder().encode(_vaultId), name: 'vault-' + _vaultId.slice(0,8), displayName: 'Vault' },
         pubKeyCredParams: [{ type:'public-key', alg:-7 }, { type:'public-key', alg:-257 }],
         authenticatorSelection: { userVerification:'required', residentKey:'preferred' },
         timeout: 60000,
       }
     });
-    localStorage.setItem(BIO_KEY, JSON.stringify({
-      id: btoa(String.fromCharCode(...new Uint8Array(cred.rawId))),
-      type: cred.type
+    localStorage.setItem('sv_bio_' + _vaultId, JSON.stringify({
+      id: toB64(new Uint8Array(cred.rawId)), type: cred.type
     }));
     closeModal('settings-modal');
     toast('Biometric registered ✓');
     checkBiometricAvailable();
-  } catch(e) {
+  } catch {
     toast('Biometric registration cancelled', true);
   }
 }
 
 async function unlockBiometric() {
-  const stored = localStorage.getItem(BIO_KEY);
-  if (!stored) { toast('No passkey registered', true); return; }
-  const { id } = JSON.parse(stored);
-  const rawId  = Uint8Array.from(atob(id), c => c.charCodeAt(0));
+  if (!webAuthnAvailable()) { toast('Passkeys not supported', true); return; }
+  const vaults = getVaults();
+  const bioList = Object.keys(vaults)
+    .map(vid => { const s = localStorage.getItem('sv_bio_' + vid); return s ? { vid, ...JSON.parse(s) } : null; })
+    .filter(Boolean);
+  if (!bioList.length) { toast('No passkey registered', true); return; }
   try {
     await navigator.credentials.get({
       publicKey: {
         challenge: crypto.getRandomValues(new Uint8Array(32)),
-        allowCredentials: [{ type:'public-key', id: rawId }],
+        allowCredentials: bioList.map(b => ({ type:'public-key', id: fromB64(b.id) })),
         userVerification: 'required',
         timeout: 60000,
       }
     });
-    // Biometric proved — but we still need the key. We store a password-encrypted
-    // copy of the vault key, wrapped by a device-bound secret.
-    // For this implementation we prompt once for password then cache key in sessionStorage.
-    const sessionRaw = sessionStorage.getItem('vk');
-    if (sessionRaw) {
-      // Key survived the session — restore it
-      const raw = Uint8Array.from(atob(sessionRaw), c => c.charCodeAt(0));
-      _key = await crypto.subtle.importKey('raw', raw, { name:'AES-GCM', length:256 }, true, ['encrypt','decrypt']);
-      const blob = localStorage.getItem(VAULT_KEY);
-      _entries = (await decrypt(blob, _key)).entries || [];
-      document.getElementById('lock-pw').value = '';
-      show('screen-app');
-      renderEntries();
-      toast('Unlocked ✓');
-    } else {
-      // First biometric use after fresh session — fall back to password once
-      document.getElementById('bio-hint').textContent = 'Biometric verified ✓ — enter password once to bind key this session';
-      document.getElementById('bio-hint').style.display = 'block';
-      toast('Enter password once to complete biometric bind');
+    // WebAuthn proved presence — try to restore session-cached key
+    const vid = sessionStorage.getItem('sv_vid');
+    if (vid) {
+      const sessionRaw = sessionStorage.getItem('sv_vk_' + vid);
+      if (sessionRaw && vaults[vid]) {
+        try {
+          const raw = fromB64(sessionRaw);
+          _key      = await crypto.subtle.importKey('raw', raw, { name:'AES-GCM', length:256 }, true, ['encrypt','decrypt']);
+          _vaultId  = vid;
+          _vsalt    = fromB64(vaults[vid].vsalt);
+          _entries  = (await decrypt(vaults[vid].data, _key)).entries || [];
+          show('screen-app'); renderEntries();
+          toast('Unlocked ✓');
+          return;
+        } catch { sessionStorage.removeItem('sv_vk_' + vid); sessionStorage.removeItem('sv_vid'); }
+      }
     }
+    document.getElementById('bio-hint').textContent = 'Biometric verified ✓ — enter password once to bind key this session';
+    document.getElementById('bio-hint').style.display = 'block';
+    toast('Enter password once to complete biometric bind');
   } catch {
     toast('Biometric failed or cancelled', true);
   }
 }
 
 function checkBiometricAvailable() {
-  const hasBio = !!localStorage.getItem(BIO_KEY) && webAuthnAvailable();
-  const btn    = document.getElementById('bio-btn');
+  if (!webAuthnAvailable()) return;
+  const hasBio = Object.keys(getVaults()).some(vid => localStorage.getItem('sv_bio_' + vid));
+  const btn = document.getElementById('bio-btn');
   btn.disabled = !hasBio;
-  if (hasBio) btn.style.opacity = '1';
 }
 
-/* Cache key in sessionStorage (tab-scoped, RAM on most browsers) */
 async function cacheKeyInSession(key) {
   const raw = await crypto.subtle.exportKey('raw', key);
-  sessionStorage.setItem('vk', btoa(String.fromCharCode(...new Uint8Array(raw))));
+  sessionStorage.setItem('sv_vk_' + _vaultId, toB64(new Uint8Array(raw)));
+  sessionStorage.setItem('sv_vid', _vaultId);
 }
 
 /* ══════════════════════════════════════════════
    VAULT PERSISTENCE
 ══════════════════════════════════════════════ */
 async function saveVault() {
-  if (!_key) return;
-  const blob = await encrypt({ entries: _entries }, _key);
-  localStorage.setItem(VAULT_KEY, blob);
-  try { await cacheKeyInSession(_key); } catch { /* session restore is optional */ }
+  if (!_key || !_vaultId || !_vsalt) return;
+  const blob   = await encrypt({ entries: _entries }, _key);
+  const vaults = getVaults();
+  vaults[_vaultId] = { vsalt: toB64(_vsalt), data: blob };
+  localStorage.setItem(VAULTS_KEY, JSON.stringify(vaults));
+  try { await cacheKeyInSession(_key); } catch {}
 }
 
 /* ══════════════════════════════════════════════
@@ -896,36 +1010,71 @@ async function deleteEntry(id) {
 function openSettings() { openModal('settings-modal'); }
 
 async function exportVault() {
-  const blob = localStorage.getItem(VAULT_KEY);
-  const salt = localStorage.getItem(SALT_KEY);
-  if (!blob)  { toast('Nothing to export', true); return; }
-  const data = JSON.stringify({ blob, salt, version: 1 });
-  const a    = document.createElement('a');
-  a.href     = URL.createObjectURL(new Blob([data], { type:'application/octet-stream' }));
+  if (!_vaultId) { toast('Nothing to export', true); return; }
+  const slot = getVaults()[_vaultId];
+  if (!slot)  { toast('Nothing to export', true); return; }
+  // version 2: vsalt + data only — no vaultId exposed; password re-derives identity on import
+  const payload = JSON.stringify({ vsalt: slot.vsalt, data: slot.data, version: 2 });
+  const a = document.createElement('a');
+  a.href  = URL.createObjectURL(new Blob([payload], { type:'application/octet-stream' }));
   a.download = `sovereign-backup-${new Date().toISOString().slice(0,10)}.vaultbak`;
   a.click();
   toast('Backup exported');
 }
 
+let _pendingImport = null;
+
 async function importVault(input) {
   const file = input.files[0];
   if (!file) return;
-  const text = await file.text();
+  input.value = '';
   try {
-    const { blob, salt } = JSON.parse(text);
-    localStorage.setItem(VAULT_KEY, blob);
-    localStorage.setItem(SALT_KEY, salt);
+    const parsed = JSON.parse(await file.text());
+    if (parsed.version === 2) {
+      _pendingImport = parsed;
+      document.getElementById('import-pw-input').value = '';
+      closeModal('settings-modal');
+      openModal('import-pw-modal');
+    } else if (parsed.version === 1 && parsed.blob && parsed.salt) {
+      // Legacy v1 format — stage for migration on next unlock
+      localStorage.setItem('vault_data', parsed.blob);
+      localStorage.setItem('vault_salt', parsed.salt);
+      toast('Backup staged — unlock with your password');
+      lockApp();
+    } else { toast('Unknown backup format', true); }
+  } catch { toast('Invalid backup file', true); }
+}
+
+async function completeImport() {
+  const pw = document.getElementById('import-pw-input').value;
+  if (!pw) { toast('Enter the backup password', true); return; }
+  if (!_pendingImport) return;
+  try {
+    const { vsalt: vsaltB64, data } = _pendingImport;
+    const vsalt = fromB64(vsaltB64);
+    const { vaultId, baseKey } = await deriveCredentials(pw);
+    const key   = await deriveEncKey(baseKey, vsalt);
+    await decrypt(data, key); // validate
+    const vaults = getVaults();
+    vaults[vaultId] = { vsalt: vsaltB64, data };
+    localStorage.setItem(VAULTS_KEY, JSON.stringify(vaults));
+    document.getElementById('import-pw-input').value = '';
+    closeModal('import-pw-modal');
+    _pendingImport = null;
     toast('Backup imported — unlock with your password');
     lockApp();
-  } catch { toast('Invalid backup file', true); }
-  input.value = '';
+  } catch { toast('Wrong password for this backup', true); }
 }
 
 function resetVault() {
-  if (!confirm('This will permanently delete all entries and reset Sovereign. Are you sure?')) return;
+  const count = Object.keys(getVaults()).length;
+  const msg   = count > 1
+    ? `This will delete ALL ${count} vaults on this device and reset Sovereign. Are you sure?`
+    : 'This will permanently delete all entries and reset Sovereign. Are you sure?';
+  if (!confirm(msg)) return;
   localStorage.clear();
   sessionStorage.clear();
-  _key = null; _entries = [];
+  _key = null; _entries = []; _vaultId = null; _vsalt = null;
   location.reload();
 }
 
@@ -933,8 +1082,9 @@ function resetVault() {
    LOCK
 ══════════════════════════════════════════════ */
 function lockApp() {
-  _key = null; _entries = [];
-  sessionStorage.removeItem('vk');
+  if (_vaultId) { sessionStorage.removeItem('sv_vk_' + _vaultId); }
+  sessionStorage.removeItem('sv_vid');
+  _key = null; _entries = []; _vaultId = null; _vsalt = null;
   show('screen-lock');
   document.getElementById('lock-pw').value = '';
 }
@@ -1021,28 +1171,56 @@ document.querySelectorAll('.modal-overlay').forEach(overlay => {
 });
 
 /* ══════════════════════════════════════════════
+   ADD ACCOUNT
+══════════════════════════════════════════════ */
+function showAddAccount() {
+  document.getElementById('setup-back-btn').style.display = '';
+  document.getElementById('setup-pw').value  = '';
+  document.getElementById('setup-pw2').value = '';
+  document.getElementById('setup-strength').innerHTML = '';
+  show('screen-setup');
+}
+
+function backToLock() {
+  document.getElementById('setup-back-btn').style.display = 'none';
+  show('screen-lock');
+}
+
+/* ══════════════════════════════════════════════
    BOOT
 ══════════════════════════════════════════════ */
 (async function boot() {
-  const hasVault = !!localStorage.getItem(VAULT_KEY);
+  const hasVaults = !!localStorage.getItem(VAULTS_KEY);
+  const hasLegacy = !!localStorage.getItem('vault_data');
 
-  if (!hasVault) {
+  if (!hasVaults && !hasLegacy) {
     show('screen-setup');
     return;
   }
 
-  // Try restoring session-cached key (same tab session)
-  const sessionRaw = sessionStorage.getItem('vk');
-  if (sessionRaw) {
-    try {
-      const raw  = Uint8Array.from(atob(sessionRaw), c => c.charCodeAt(0));
-      _key       = await crypto.subtle.importKey('raw', raw, { name:'AES-GCM', length:256 }, true, ['encrypt','decrypt']);
-      const blob = localStorage.getItem(VAULT_KEY);
-      _entries   = (await decrypt(blob, _key)).entries || [];
-      show('screen-app');
-      renderEntries();
-      return;
-    } catch { sessionStorage.removeItem('vk'); }
+  // Try restoring session-cached key
+  const vid = sessionStorage.getItem('sv_vid');
+  if (vid) {
+    const sessionRaw = sessionStorage.getItem('sv_vk_' + vid);
+    if (sessionRaw) {
+      try {
+        const raw    = fromB64(sessionRaw);
+        _key         = await crypto.subtle.importKey('raw', raw, { name:'AES-GCM', length:256 }, true, ['encrypt','decrypt']);
+        const vaults = getVaults();
+        const slot   = vaults[vid];
+        if (slot) {
+          _vaultId = vid;
+          _vsalt   = fromB64(slot.vsalt);
+          _entries = (await decrypt(slot.data, _key)).entries || [];
+          show('screen-app');
+          renderEntries();
+          return;
+        }
+      } catch {
+        sessionStorage.removeItem('sv_vk_' + vid);
+        sessionStorage.removeItem('sv_vid');
+      }
+    }
   }
 
   show('screen-lock');
