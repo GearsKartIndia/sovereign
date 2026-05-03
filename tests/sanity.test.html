@@ -145,7 +145,12 @@ async function encrypt(data, key) {
   const iv  = crypto.getRandomValues(new Uint8Array(12));
   const enc = new TextEncoder();
   const ct  = await crypto.subtle.encrypt({ name:'AES-GCM', iv }, key, enc.encode(JSON.stringify(data)));
-  return btoa(String.fromCharCode(...iv) + String.fromCharCode(...new Uint8Array(ct)));
+  const out = new Uint8Array(12 + ct.byteLength);
+  out.set(iv);
+  out.set(new Uint8Array(ct), 12);
+  let s = '';
+  for (let i = 0; i < out.length; i++) s += String.fromCharCode(out[i]);
+  return btoa(s);
 }
 
 async function decrypt(b64, key) {
