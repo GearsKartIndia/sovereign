@@ -1262,10 +1262,14 @@ document.addEventListener('keydown', e => {
   if (e.key === 'Enter' && document.getElementById('screen-setup')?.classList.contains('active')) setupVault();
 });
 
-/* Auto-lock when tab is hidden */
+/* Auto-lock when tab is hidden; pull when it comes back into view */
 document.addEventListener('visibilitychange', () => {
   if (document.hidden && _key) lockApp();
+  else if (!document.hidden && _key && _syncKey) syncPull();
 });
+
+/* Background poll — pull every 30 s while the vault is unlocked */
+setInterval(() => { if (_key && _syncKey) syncPull(); }, 30_000);
 
 /* Close modal on overlay click */
 document.querySelectorAll('.modal-overlay').forEach(overlay => {
