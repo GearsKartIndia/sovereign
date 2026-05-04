@@ -546,12 +546,12 @@ input.has-eye { padding-right: 2.5rem; }
 
       <div style="border-top:1px solid var(--border);padding-top:0.875rem;margin-top:0.875rem">
         <p class="text-sm" style="margin-bottom:0.25rem;font-weight:500;color:var(--ink2)">Live Sync</p>
-        <p class="text-sm" style="margin-bottom:0.625rem;color:var(--ink3)">Pair devices via QR, then paste your Cloudflare Worker URL to keep them in sync.</p>
+        <p class="text-sm" style="margin-bottom:0.625rem;color:var(--ink3)">Sync is built-in — just pair devices via QR. Advanced: override with your own self-hosted Worker URL.</p>
         <div class="field" style="margin-bottom:0.625rem">
-          <label class="field-label">Worker URL</label>
+          <label class="field-label">Custom Worker URL (optional)</label>
           <input type="text" id="sync-url-input" placeholder="https://sovereign-sync.you.workers.dev" autocomplete="off">
         </div>
-        <button class="btn btn-ghost" style="width:100%" onclick="saveSyncUrl()">💾 Save Sync URL</button>
+        <button class="btn btn-ghost" style="width:100%" onclick="saveSyncUrl()">💾 Save Custom URL</button>
       </div>
 
       <div class="danger-zone">
@@ -638,7 +638,8 @@ var qrcode=function(){var t=function(t,r){var e=t,n=g[r],o=null,i=0,a=null,u=[],
 const PBKDF2_ITER = 310000;
 const GSALT_KEY   = 'sv_gsalt';    // global 32-byte device salt (base64)
 const VAULTS_KEY  = 'sv_vaults';   // JSON map: vaultId → { vsalt, data }
-const SYNC_URL_KEY = 'sv_sync_url'; // Cloudflare Worker URL (global, user-configured)
+const SYNC_URL_KEY     = 'sv_sync_url'; // override — power users / self-hosters only
+const SYNC_URL_DEFAULT = '';            // ← paste your Worker URL here after deploying
 
 /* Single PBKDF2 call → 48 bytes: [0-15] = vaultId, [16-47] = baseKey material */
 async function deriveCredentials(password, gsaltOverride) {
@@ -1364,7 +1365,7 @@ async function sendVaultToPeer(mobilePubB64, sid) {
   _syncKey = syncEncKey;
 
   const slot    = getVaults()[_vaultId];
-  const syncUrl = localStorage.getItem(SYNC_URL_KEY);
+  const syncUrl = localStorage.getItem(SYNC_URL_KEY) || SYNC_URL_DEFAULT;
   const vaultPayload = {
     gsalt: toB64(getGlobalSalt()), vsalt: slot.vsalt, data: slot.data, version: 2,
     ...(syncUrl && { syncUrl })
@@ -1495,7 +1496,7 @@ async function startPairSend(sid) {
 async function doSendVaultToDesktop(sid, sessionKey) {
   const slot    = getVaults()[_vaultId];
   if (!slot) { toast('No vault to send', true); return; }
-  const syncUrl = localStorage.getItem(SYNC_URL_KEY);
+  const syncUrl = localStorage.getItem(SYNC_URL_KEY) || SYNC_URL_DEFAULT;
   const payload = new TextEncoder().encode(JSON.stringify({
     gsalt: toB64(getGlobalSalt()), vsalt: slot.vsalt, data: slot.data, version: 2,
     ...(syncUrl && { syncUrl })
@@ -1614,7 +1615,7 @@ async function loadSyncKey() {
 
 function syncGetCreds() {
   if (!_vaultId || !_syncKey) return null;
-  const syncUrl   = localStorage.getItem(SYNC_URL_KEY);
+  const syncUrl   = localStorage.getItem(SYNC_URL_KEY) || SYNC_URL_DEFAULT;
   const syncId    = localStorage.getItem(`sv_sync_id_${_vaultId}`);
   const syncToken = localStorage.getItem(`sv_sync_tok_${_vaultId}`);
   if (!syncUrl || !syncId || !syncToken) return null;
