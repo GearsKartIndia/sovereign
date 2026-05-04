@@ -619,9 +619,9 @@ const GSALT_KEY   = 'sv_gsalt';   // global 32-byte device salt (base64)
 const VAULTS_KEY  = 'sv_vaults';  // JSON map: vaultId → { vsalt, data }
 
 /* Single PBKDF2 call → 48 bytes: [0-15] = vaultId, [16-47] = baseKey material */
-async function deriveCredentials(password) {
+async function deriveCredentials(password, gsaltOverride) {
   const enc    = new TextEncoder();
-  const gsalt  = getGlobalSalt();
+  const gsalt  = gsaltOverride || getGlobalSalt();
   const rawKey = await crypto.subtle.importKey('raw', enc.encode(password), 'PBKDF2', false, ['deriveBits']);
   const bits   = await crypto.subtle.deriveBits(
     { name:'PBKDF2', salt: gsalt, iterations: PBKDF2_ITER, hash:'SHA-256' },
@@ -1055,8 +1055,8 @@ async function exportVault() {
   if (!_vaultId) { toast('Nothing to export', true); return; }
   const slot = getVaults()[_vaultId];
   if (!slot)  { toast('Nothing to export', true); return; }
-  // version 2: vsalt + data only — no vaultId exposed; password re-derives identity on import
-  const payload = JSON.stringify({ vsalt: slot.vsalt, data: slot.data, version: 2 });
+  // gsalt included so any device can reproduce the decryption key from the password alone
+  const payload = JSON.stringify({ gsalt: toB64(getGlobalSalt()), vsalt: slot.vsalt, data: slot.data, version: 2 });
   const a = document.createElement('a');
   a.href  = URL.createObjectURL(new Blob([payload], { type:'application/octet-stream' }));
   a.download = `sovereign-backup-${new Date().toISOString().slice(0,10)}.vaultbak`;
@@ -1092,13 +1092,22 @@ async function completeImport() {
   if (!pw) { toast('Enter the backup password', true); return; }
   if (!_pendingImport) return;
   try {
-    const { vsalt: vsaltB64, data } = _pendingImport;
-    const vsalt = fromB64(vsaltB64);
+    const { gsalt: gsaltB64, vsalt: vsaltB64, data } = _pendingImport;
+
+    // Decrypt using the SOURCE device's gsalt (cross-device compatible)
+    const srcGsalt = gsaltB64 ? fromB64(gsaltB64) : getGlobalSalt();
+    const { baseKey: srcBase } = await deriveCredentials(pw, srcGsalt);
+    const srcKey   = await deriveEncKey(srcBase, fromB64(vsaltB64));
+    const plaintext = await decrypt(data, srcKey); // throws on wrong password
+
+    // Re-encrypt under THIS device's own gsalt so normal unlock works here
     const { vaultId, baseKey } = await deriveCredentials(pw);
-    const key   = await deriveEncKey(baseKey, vsalt);
-    await decrypt(data, key); // validate
+    const myVsalt = crypto.getRandomValues(new Uint8Array(32));
+    const myKey   = await deriveEncKey(baseKey, myVsalt);
+    const myData  = await encrypt(plaintext, myKey);
+
     const vaults = getVaults();
-    vaults[vaultId] = { vsalt: vsaltB64, data };
+    vaults[vaultId] = { vsalt: toB64(myVsalt), data: myData };
     localStorage.setItem(VAULTS_KEY, JSON.stringify(vaults));
     document.getElementById('import-pw-input').value = '';
     closeModal('import-pw-modal');
@@ -1296,7 +1305,7 @@ async function startSendToPhone() {
 async function sendVaultToPeer(mobilePubB64, sid) {
   const sessionKey = await ecdhSessionKey(_pairKP.privateKey, pairFrom64(mobilePubB64));
   const slot       = getVaults()[_vaultId];
-  const payload    = new TextEncoder().encode(JSON.stringify({ vsalt: slot.vsalt, data: slot.data, version: 2 }));
+  const payload    = new TextEncoder().encode(JSON.stringify({ gsalt: toB64(getGlobalSalt()), vsalt: slot.vsalt, data: slot.data, version: 2 }));
   const iv  = crypto.getRandomValues(new Uint8Array(12));
   const ct  = await crypto.subtle.encrypt({ name:'AES-GCM', iv }, sessionKey, payload);
   const out = new Uint8Array(12 + ct.byteLength);
