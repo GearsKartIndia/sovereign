@@ -639,7 +639,7 @@ const PBKDF2_ITER = 310000;
 const GSALT_KEY   = 'sv_gsalt';    // global 32-byte device salt (base64)
 const VAULTS_KEY  = 'sv_vaults';   // JSON map: vaultId → { vsalt, data }
 const SYNC_URL_KEY     = 'sv_sync_url'; // override — power users / self-hosters only
-const SYNC_URL_DEFAULT = 'https://sovereign-copps.workers.dev';            // ← paste your Worker URL here after deploying
+const SYNC_URL_DEFAULT = 'https://sovereign-sync.sovereign-copps.workers.dev';
 
 /* Single PBKDF2 call → 48 bytes: [0-15] = vaultId, [16-47] = baseKey material */
 async function deriveCredentials(password, gsaltOverride) {
