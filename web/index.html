@@ -415,6 +415,10 @@ input.has-eye { padding-right: 2.5rem; }
     <div class="security-note">
       🔐 Your vault is encrypted with AES-256-GCM. The master password never leaves this device.
     </div>
+
+    <button class="btn btn-ghost" style="width:100%;margin-top:0.875rem;font-size:0.875rem" onclick="startReceiveFromPhone()">
+      📲 Already have a vault on your phone? Receive it here
+    </button>
   </div>
 </div>
 
@@ -527,7 +531,10 @@ input.has-eye { padding-right: 2.5rem; }
         🪪 Register biometric / passkey
       </button>
       <button class="btn btn-ghost" style="width:100%;margin-bottom:0.625rem" onclick="startSendToPhone()">
-        📱 Send to phone
+        📱 Send vault to phone
+      </button>
+      <button class="btn btn-ghost" style="width:100%;margin-bottom:0.625rem" onclick="startReceiveFromPhone()">
+        📲 Receive vault from phone
       </button>
       <button class="btn btn-ghost" style="width:100%;margin-bottom:0.625rem" onclick="exportVault()">
         📤 Export encrypted backup
@@ -716,6 +723,7 @@ let _syncKey      = null;   // AES-GCM key shared with paired device
 let _syncPulling  = false;  // prevents save→push loop during pull
 let _syncPushTimer;
 let _pendingSync  = null;   // temp storage for sync creds during QR import flow
+let _pendingPairSend = null; // phone: stash ECDH creds while waiting for unlock to send vault
 
 /* ══════════════════════════════════════════════
    SETUP
@@ -775,6 +783,7 @@ async function unlock() {
         toast('Unlocked ✓');
         try { await cacheKeyInSession(_key); } catch {}
         await loadSyncKey(); syncPull();
+        completePendingPairSend();
         return;
       }
     }
@@ -814,6 +823,7 @@ async function unlockAndMigrateLegacy(pw) {
   toast('Vault migrated and unlocked ✓');
   try { await cacheKeyInSession(_key); } catch {}
   await loadSyncKey(); syncPull();
+  completePendingPairSend();
 }
 
 /* ══════════════════════════════════════════════
@@ -878,6 +888,7 @@ async function unlockBiometric() {
           show('screen-app'); renderEntries();
           toast('Unlocked ✓');
           await loadSyncKey(); syncPull();
+          completePendingPairSend();
           return;
         } catch { sessionStorage.removeItem('sv_vk_' + vid); sessionStorage.removeItem('sv_vid'); }
       }
@@ -1380,7 +1391,137 @@ function setPairStatus(msg, isError) {
   if (el) { el.textContent = msg; el.style.color = isError ? 'var(--red)' : ''; }
 }
 
-/* ── Receive side (mobile opens ?pair=sid URL) ─────── */
+/* ── Desktop receives vault from phone (?pair=sid&mode=recv) ─────── */
+async function startReceiveFromPhone() {
+  closeModal('settings-modal');
+  openModal('pair-send-modal');
+  document.getElementById('pair-qr').innerHTML = '';
+  setPairStatus('Generating pairing code…');
+  try {
+    _pairKP        = await genECDH();
+    const pubBytes = new Uint8Array(await crypto.subtle.exportKey('raw', _pairKP.publicKey));
+    const sid      = pairB64(crypto.getRandomValues(new Uint8Array(12)));
+
+    await fetch(`${NTFY}/sov-${sid}-offer`, {
+      method: 'POST', body: pairB64(pubBytes),
+      headers: { 'Content-Type':'text/plain', 'X-Expires':'600' }
+    });
+
+    // mode=recv tells the phone that IT is the sender
+    const pairUrl = `${location.origin}${location.pathname}?pair=${sid}&mode=recv`;
+    showQR(pairUrl);
+    setPairStatus('Scan with your phone — it will send its vault here');
+
+    _pairSSE = new EventSource(`${NTFY}/sov-${sid}-ready/sse`);
+    _pairSSE.addEventListener('message', async e => {
+      try {
+        const phonePubB64  = JSON.parse(e.data).message;
+        _pairSSE.close(); _pairSSE = null;
+        setPairStatus('Phone connected — waiting for vault…');
+
+        const phonePubBytes = pairFrom64(phonePubB64);
+        const sessionKey    = await ecdhSessionKey(_pairKP.privateKey, phonePubBytes);
+        const { syncId, syncToken, syncEncKey, syncKeyRaw } = await deriveSyncCreds(_pairKP.privateKey, phonePubBytes);
+
+        const vaultES = new EventSource(`${NTFY}/sov-${sid}-vault/sse`);
+        const timer   = setTimeout(() => { vaultES.close(); setPairStatus('Timed out — close and try again', true); }, 180_000);
+
+        vaultES.addEventListener('message', async e2 => {
+          clearTimeout(timer); vaultES.close();
+          try {
+            const msg = JSON.parse(e2.data);
+            if (!msg.attachment?.url) throw new Error('No vault attachment');
+            setPairStatus('Downloading vault from phone…');
+            const vaultBytes = new Uint8Array(await (await fetch(msg.attachment.url)).arrayBuffer());
+            const iv  = vaultBytes.slice(0, 12), ct = vaultBytes.slice(12);
+            const pt  = await crypto.subtle.decrypt({ name:'AES-GCM', iv }, sessionKey, ct);
+            _pendingImport = JSON.parse(new TextDecoder().decode(pt));
+            _pendingSync   = { syncId, syncToken, syncKeyRaw };
+            _pairKP        = null;
+            closeModal('pair-send-modal');
+            document.getElementById('import-pw-input').value = '';
+            openModal('import-pw-modal');
+          } catch(err) { setPairStatus('Error — ' + err.message, true); }
+        });
+        vaultES.onerror = () => { clearTimeout(timer); setPairStatus('Connection lost — close and try again', true); };
+      } catch(err) { setPairStatus('Error — ' + err.message, true); }
+    });
+    _pairSSE.onerror = () => {
+      if (_pairSSE) { setPairStatus('Connection lost — close and try again', true); }
+    };
+    setTimeout(() => {
+      if (_pairSSE) { _pairSSE.close(); _pairSSE = null; setPairStatus('Session expired — close and try again', true); }
+    }, 300_000);
+  } catch(err) { setPairStatus('Error — ' + err.message, true); }
+}
+
+/* ── Phone sends its vault when it scans a mode=recv QR ─────────── */
+async function startPairSend(sid) {
+  openModal('pair-receive-modal');
+  setReceiveStatus('Connecting to desktop…');
+  try {
+    const resp = await fetch(`${NTFY}/sov-${sid}-offer/json?poll=1&since=10m`);
+    const line = (await resp.text()).trim().split('\n').find(l => l.trim());
+    if (!line) throw new Error('Session not found or expired — ask desktop to try again');
+    const desktopPubB64   = JSON.parse(line).message;
+
+    const kp              = await genECDH();
+    const pubBytes        = new Uint8Array(await crypto.subtle.exportKey('raw', kp.publicKey));
+    const desktopPubBytes = pairFrom64(desktopPubB64);
+    const sessionKey      = await ecdhSessionKey(kp.privateKey, desktopPubBytes);
+    const { syncId, syncToken, syncEncKey, syncKeyRaw } = await deriveSyncCreds(kp.privateKey, desktopPubBytes);
+
+    // Tell desktop our public key so it can also derive session + sync keys
+    await fetch(`${NTFY}/sov-${sid}-ready`, {
+      method: 'POST', body: pairB64(pubBytes),
+      headers: { 'Content-Type':'text/plain', 'X-Expires':'120' }
+    });
+
+    if (_key && _vaultId) {
+      // Already unlocked — send vault straight away
+      setReceiveStatus('Sending vault to desktop…');
+      storeSyncCreds(_vaultId, syncId, syncToken, syncKeyRaw);
+      _syncKey = syncEncKey;
+      await doSendVaultToDesktop(sid, sessionKey);
+    } else {
+      // Locked — stash creds and resume after unlock
+      _pendingPairSend = { sid, sessionKey, syncId, syncToken, syncEncKey, syncKeyRaw };
+      closeModal('pair-receive-modal');
+      toast('Unlock your vault to send it to desktop');
+    }
+  } catch(err) { setReceiveStatus(err.message, true); }
+}
+
+async function doSendVaultToDesktop(sid, sessionKey) {
+  const slot    = getVaults()[_vaultId];
+  if (!slot) { toast('No vault to send', true); return; }
+  const syncUrl = localStorage.getItem(SYNC_URL_KEY);
+  const payload = new TextEncoder().encode(JSON.stringify({
+    gsalt: toB64(getGlobalSalt()), vsalt: slot.vsalt, data: slot.data, version: 2,
+    ...(syncUrl && { syncUrl })
+  }));
+  const iv  = crypto.getRandomValues(new Uint8Array(12));
+  const ct  = await crypto.subtle.encrypt({ name:'AES-GCM', iv }, sessionKey, payload);
+  const out = new Uint8Array(12 + ct.byteLength);
+  out.set(iv); out.set(new Uint8Array(ct), 12);
+  await fetch(`${NTFY}/sov-${sid}-vault`, {
+    method: 'PUT', body: out,
+    headers: { 'Content-Type':'application/octet-stream', 'X-Filename':'vault.bin', 'X-Expires':'300' }
+  });
+  closeModal('pair-receive-modal');
+  toast('Vault sent to desktop ✓ — unlock with your password there');
+}
+
+function completePendingPairSend() {
+  if (!_pendingPairSend) return;
+  const { sid, sessionKey, syncId, syncToken, syncEncKey, syncKeyRaw } = _pendingPairSend;
+  _pendingPairSend = null;
+  storeSyncCreds(_vaultId, syncId, syncToken, syncKeyRaw);
+  _syncKey = syncEncKey;
+  doSendVaultToDesktop(sid, sessionKey);
+}
+
+/* ── Receive side (phone opens ?pair=sid URL — desktop is sender) ─── */
 async function startPairReceive(sid) {
   openModal('pair-receive-modal');
   setReceiveStatus('Fetching desktop pairing info…');
@@ -1595,11 +1736,14 @@ function backToLock() {
    BOOT
 ══════════════════════════════════════════════ */
 (async function boot() {
-  // Handle ?pair= pairing URL (mobile receiving from desktop)
-  const urlPair = new URLSearchParams(location.search).get('pair');
+  // Handle ?pair= pairing URL
+  const urlParams = new URLSearchParams(location.search);
+  const urlPair   = urlParams.get('pair');
+  const pairMode  = urlParams.get('mode');
   if (urlPair) {
-    history.replaceState(null, '', location.pathname); // clean URL
-    startPairReceive(urlPair);                         // opens receive modal
+    history.replaceState(null, '', location.pathname);
+    if (pairMode === 'recv') startPairSend(urlPair);   // this device sends its vault
+    else                     startPairReceive(urlPair); // this device receives vault
   }
 
   const hasVaults = !!localStorage.getItem(VAULTS_KEY);
@@ -1627,6 +1771,7 @@ function backToLock() {
           show('screen-app');
           renderEntries();
           await loadSyncKey(); syncPull();
+          completePendingPairSend();
           return;
         }
       } catch {
