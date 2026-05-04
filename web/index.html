@@ -9,7 +9,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Sovereign by Copps">
 <meta name="description" content="Free Password Store — Truly local. No servers, no accounts.">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; connect-src 'self' https://ntfy.sh; worker-src 'self'; manifest-src 'self'; base-uri 'self'; form-action 'none';">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; connect-src 'self' https://ntfy.sh https://*.workers.dev; worker-src 'self'; manifest-src 'self'; base-uri 'self'; form-action 'none';">
 <link rel="manifest" href="manifest.json">
 <title>Sovereign by Copps</title>
 <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=DM+Mono:wght@400;500&family=Geist:wght@300;400;500;600&display=swap" rel="stylesheet">
@@ -453,7 +453,11 @@ input.has-eye { padding-right: 2.5rem; }
 <!-- ═══ APP SCREEN ═══ -->
 <div id="screen-app" class="screen">
   <header class="app-header">
-    <div style="flex:1"><div class="app-logo">Sovereign <span>by Copps</span></div><div style="font-size:0.6875rem;color:var(--ink4);font-weight:300;letter-spacing:0.04em;margin-top:1px">Free Password Store — Truly local</div></div>
+    <div style="flex:1">
+      <div class="app-logo">Sovereign <span>by Copps</span></div>
+      <div style="font-size:0.6875rem;color:var(--ink4);font-weight:300;letter-spacing:0.04em;margin-top:1px">Free Password Store — Truly local</div>
+      <div id="sync-status" style="font-size:0.65rem;color:var(--ink4);font-weight:300;margin-top:1px;display:none"></div>
+    </div>
     <button class="btn btn-icon" onclick="openSettings()" title="Settings">⚙️</button>
     <button class="btn btn-icon" onclick="lockApp()" title="Lock vault">🔒</button>
   </header>
@@ -532,6 +536,16 @@ input.has-eye { padding-right: 2.5rem; }
         📥 Import backup
       </button>
       <input type="file" id="import-file" accept=".vaultbak" style="display:none" onchange="importVault(this)">
+
+      <div style="border-top:1px solid var(--border);padding-top:0.875rem;margin-top:0.875rem">
+        <p class="text-sm" style="margin-bottom:0.25rem;font-weight:500;color:var(--ink2)">Live Sync</p>
+        <p class="text-sm" style="margin-bottom:0.625rem;color:var(--ink3)">Pair devices via QR, then paste your Cloudflare Worker URL to keep them in sync.</p>
+        <div class="field" style="margin-bottom:0.625rem">
+          <label class="field-label">Worker URL</label>
+          <input type="text" id="sync-url-input" placeholder="https://sovereign-sync.you.workers.dev" autocomplete="off">
+        </div>
+        <button class="btn btn-ghost" style="width:100%" onclick="saveSyncUrl()">💾 Save Sync URL</button>
+      </div>
 
       <div class="danger-zone">
         <p class="text-sm" style="margin-bottom:0.625rem;color:var(--red)">Danger zone</p>
@@ -615,8 +629,9 @@ var qrcode=function(){var t=function(t,r){var e=t,n=g[r],o=null,i=0,a=null,u=[],
    CRYPTO LAYER — AES-256-GCM + PBKDF2 + HKDF
 ══════════════════════════════════════════════ */
 const PBKDF2_ITER = 310000;
-const GSALT_KEY   = 'sv_gsalt';   // global 32-byte device salt (base64)
-const VAULTS_KEY  = 'sv_vaults';  // JSON map: vaultId → { vsalt, data }
+const GSALT_KEY   = 'sv_gsalt';    // global 32-byte device salt (base64)
+const VAULTS_KEY  = 'sv_vaults';   // JSON map: vaultId → { vsalt, data }
+const SYNC_URL_KEY = 'sv_sync_url'; // Cloudflare Worker URL (global, user-configured)
 
 /* Single PBKDF2 call → 48 bytes: [0-15] = vaultId, [16-47] = baseKey material */
 async function deriveCredentials(password, gsaltOverride) {
@@ -692,11 +707,15 @@ function getVaults() {
 /* ══════════════════════════════════════════════
    APP STATE
 ══════════════════════════════════════════════ */
-let _key     = null;
-let _entries = [];
-let _editId  = null;
-let _vaultId = null;
-let _vsalt   = null;
+let _key          = null;
+let _entries      = [];
+let _editId       = null;
+let _vaultId      = null;
+let _vsalt        = null;
+let _syncKey      = null;   // AES-GCM key shared with paired device
+let _syncPulling  = false;  // prevents save→push loop during pull
+let _syncPushTimer;
+let _pendingSync  = null;   // temp storage for sync creds during QR import flow
 
 /* ══════════════════════════════════════════════
    SETUP
@@ -755,6 +774,7 @@ async function unlock() {
         show('screen-app'); renderEntries();
         toast('Unlocked ✓');
         try { await cacheKeyInSession(_key); } catch {}
+        await loadSyncKey(); syncPull();
         return;
       }
     }
@@ -793,6 +813,7 @@ async function unlockAndMigrateLegacy(pw) {
   show('screen-app'); renderEntries();
   toast('Vault migrated and unlocked ✓');
   try { await cacheKeyInSession(_key); } catch {}
+  await loadSyncKey(); syncPull();
 }
 
 /* ══════════════════════════════════════════════
@@ -856,6 +877,7 @@ async function unlockBiometric() {
           _entries  = (await decrypt(vaults[vid].data, _key)).entries || [];
           show('screen-app'); renderEntries();
           toast('Unlocked ✓');
+          await loadSyncKey(); syncPull();
           return;
         } catch { sessionStorage.removeItem('sv_vk_' + vid); sessionStorage.removeItem('sv_vid'); }
       }
@@ -891,6 +913,7 @@ async function saveVault() {
   vaults[_vaultId] = { vsalt: toB64(_vsalt), data: blob };
   localStorage.setItem(VAULTS_KEY, JSON.stringify(vaults));
   try { await cacheKeyInSession(_key); } catch {}
+  if (!_syncPulling) scheduleSyncPush();
 }
 
 /* ══════════════════════════════════════════════
@@ -909,7 +932,7 @@ const MAX_VISIBLE = 100;
 function renderEntries() {
   const q       = (document.getElementById('search-input')?.value || '').toLowerCase();
   const list    = document.getElementById('entry-list');
-  const filtered = _entries.filter(e => e.name.toLowerCase().includes(q));
+  const filtered = _entries.filter(e => !e.deleted && e.name.toLowerCase().includes(q));
   const visible  = filtered.slice(0, MAX_VISIBLE);
   const total    = filtered.length;
 
@@ -919,10 +942,11 @@ function renderEntries() {
                            `First ${MAX_VISIBLE} of ${total.toLocaleString()} — type more to narrow`;
 
   if (!total) {
+    const hasAny = _entries.some(e => !e.deleted);
     list.innerHTML = `<div class="empty-state">
-      <div class="empty-icon">${_entries.length ? '🔍' : '🗝️'}</div>
-      <div class="empty-title">${_entries.length ? 'No matches' : 'No entries yet'}</div>
-      <div>${_entries.length ? 'Try a different search' : 'Tap + to add your first secret'}</div>
+      <div class="empty-icon">${hasAny ? '🔍' : '🗝️'}</div>
+      <div class="empty-title">${hasAny ? 'No matches' : 'No entries yet'}</div>
+      <div>${hasAny ? 'Try a different search' : 'Tap + to add your first secret'}</div>
     </div>`;
     return;
   }
@@ -1014,16 +1038,16 @@ async function saveEntry() {
     : document.getElementById('e-value-single').value.trim();
   if (!name)  { toast('Name is required', true); return; }
   if (!value) { toast('Value is required', true); return; }
-  if (!_editId && _entries.length >= MAX_ENTRIES) {
+  if (!_editId && _entries.filter(e => !e.deleted).length >= MAX_ENTRIES) {
     toast(`Vault is full — maximum ${MAX_ENTRIES.toLocaleString()} entries`, true);
     return;
   }
 
   if (_editId) {
     const idx = _entries.findIndex(x => x.id === _editId);
-    if (idx !== -1) _entries[idx] = { ..._entries[idx], name, value, multiline: isMulti };
+    if (idx !== -1) _entries[idx] = { ..._entries[idx], name, value, multiline: isMulti, updated: Date.now() };
   } else {
-    _entries.push({ id: crypto.randomUUID(), name, value, multiline: isMulti, created: Date.now() });
+    _entries.push({ id: crypto.randomUUID(), name, value, multiline: isMulti, created: Date.now(), updated: Date.now() });
   }
   try {
     await saveVault();
@@ -1038,8 +1062,10 @@ async function saveEntry() {
 
 async function deleteEntry(id) {
   const e = _entries.find(x => x.id === id);
-  if (!confirm(`Delete "${e?.name}"? This cannot be undone.`)) return;
-  _entries = _entries.filter(x => x.id !== id);
+  if (!e || e.deleted) return;
+  if (!confirm(`Delete "${e.name}"? This cannot be undone.`)) return;
+  const idx = _entries.findIndex(x => x.id === id);
+  _entries[idx] = { id, deleted: true, updated: Date.now() };
   _revealed.delete(id);
   await saveVault();
   renderEntries();
@@ -1049,7 +1075,10 @@ async function deleteEntry(id) {
 /* ══════════════════════════════════════════════
    SETTINGS
 ══════════════════════════════════════════════ */
-function openSettings() { openModal('settings-modal'); }
+function openSettings() {
+  document.getElementById('sync-url-input').value = localStorage.getItem(SYNC_URL_KEY) || '';
+  openModal('settings-modal');
+}
 
 async function exportVault() {
   if (!_vaultId) { toast('Nothing to export', true); return; }
@@ -1109,6 +1138,16 @@ async function completeImport() {
     const vaults = getVaults();
     vaults[vaultId] = { vsalt: toB64(myVsalt), data: myData };
     localStorage.setItem(VAULTS_KEY, JSON.stringify(vaults));
+
+    // Apply sync credentials derived during QR pairing (if present)
+    if (_pendingSync) {
+      storeSyncCreds(vaultId, _pendingSync.syncId, _pendingSync.syncToken, _pendingSync.syncKeyRaw);
+      _pendingSync = null;
+    }
+    if (_pendingImport.syncUrl) {
+      localStorage.setItem(SYNC_URL_KEY, _pendingImport.syncUrl);
+    }
+
     document.getElementById('import-pw-input').value = '';
     closeModal('import-pw-modal');
     _pendingImport = null;
@@ -1135,7 +1174,9 @@ function resetVault() {
 function lockApp() {
   if (_vaultId) { sessionStorage.removeItem('sv_vk_' + _vaultId); }
   sessionStorage.removeItem('sv_vid');
-  _key = null; _entries = []; _vaultId = null; _vsalt = null;
+  clearTimeout(_syncPushTimer);
+  _key = null; _entries = []; _vaultId = null; _vsalt = null; _syncKey = null;
+  updateSyncStatus('');
   show('screen-lock');
   document.getElementById('lock-pw').value = '';
 }
@@ -1303,9 +1344,21 @@ async function startSendToPhone() {
 }
 
 async function sendVaultToPeer(mobilePubB64, sid) {
-  const sessionKey = await ecdhSessionKey(_pairKP.privateKey, pairFrom64(mobilePubB64));
-  const slot       = getVaults()[_vaultId];
-  const payload    = new TextEncoder().encode(JSON.stringify({ gsalt: toB64(getGlobalSalt()), vsalt: slot.vsalt, data: slot.data, version: 2 }));
+  const mobilePubBytes = pairFrom64(mobilePubB64);
+  const sessionKey = await ecdhSessionKey(_pairKP.privateKey, mobilePubBytes);
+
+  // Derive shared sync credentials (independent of session key)
+  const { syncId, syncToken, syncEncKey, syncKeyRaw } = await deriveSyncCreds(_pairKP.privateKey, mobilePubBytes);
+  storeSyncCreds(_vaultId, syncId, syncToken, syncKeyRaw);
+  _syncKey = syncEncKey;
+
+  const slot    = getVaults()[_vaultId];
+  const syncUrl = localStorage.getItem(SYNC_URL_KEY);
+  const vaultPayload = {
+    gsalt: toB64(getGlobalSalt()), vsalt: slot.vsalt, data: slot.data, version: 2,
+    ...(syncUrl && { syncUrl })
+  };
+  const payload = new TextEncoder().encode(JSON.stringify(vaultPayload));
   const iv  = crypto.getRandomValues(new Uint8Array(12));
   const ct  = await crypto.subtle.encrypt({ name:'AES-GCM', iv }, sessionKey, payload);
   const out = new Uint8Array(12 + ct.byteLength);
@@ -1338,10 +1391,13 @@ async function startPairReceive(sid) {
     if (!line) throw new Error('Session not found or expired — ask desktop to try again');
     const desktopPubB64 = JSON.parse(line).message;
 
-    // Generate mobile ECDH key pair and derive shared session key
+    // Generate mobile ECDH key pair and derive shared session key + sync credentials
     const kp         = await genECDH();
     const pubBytes   = new Uint8Array(await crypto.subtle.exportKey('raw', kp.publicKey));
-    const sessionKey = await ecdhSessionKey(kp.privateKey, pairFrom64(desktopPubB64));
+    const desktopPubBytes = pairFrom64(desktopPubB64);
+    const sessionKey = await ecdhSessionKey(kp.privateKey, desktopPubBytes);
+    const { syncId, syncToken, syncKeyRaw } = await deriveSyncCreds(kp.privateKey, desktopPubBytes);
+    _pendingSync = { syncId, syncToken, syncKeyRaw };
 
     // Subscribe for vault BEFORE sending ready signal (prevents race)
     const vaultES = new EventSource(`${NTFY}/sov-${sid}-vault/sse`);
@@ -1376,6 +1432,147 @@ async function startPairReceive(sid) {
 function setReceiveStatus(msg, isError) {
   const el = document.getElementById('pair-receive-status');
   if (el) { el.textContent = msg; el.style.color = isError ? 'var(--red)' : ''; }
+}
+
+/* ══════════════════════════════════════════════
+   LIVE SYNC — Cloudflare Worker + KV
+══════════════════════════════════════════════ */
+
+/* Derive channelId + token + AES key from ECDH shared bits.
+   Both paired devices independently arrive at the same values. */
+async function deriveSyncCreds(myPrivKey, theirPubBytes) {
+  const theirPub = await crypto.subtle.importKey('raw', theirPubBytes, { name:'ECDH', namedCurve:'P-256' }, false, []);
+  const shared   = await crypto.subtle.deriveBits({ name:'ECDH', public: theirPub }, myPrivKey, 256);
+  const km       = await crypto.subtle.importKey('raw', shared, 'HKDF', false, ['deriveBits']);
+  const bits     = await crypto.subtle.deriveBits(
+    { name:'HKDF', hash:'SHA-256', salt: new Uint8Array(32), info: new TextEncoder().encode('sovereign-v1-sync-creds') },
+    km, 768  // 96 bytes: [0-16) syncId, [16-48) syncToken, [48-80) enc key
+  );
+  const bytes      = new Uint8Array(bits);
+  const syncId     = pairB64(bytes.slice(0,  16));
+  const syncToken  = pairB64(bytes.slice(16, 48));
+  const syncKeyRaw = bytes.slice(48, 80);
+  const syncEncKey = await crypto.subtle.importKey('raw', syncKeyRaw, { name:'AES-GCM', length:256 }, false, ['encrypt','decrypt']);
+  return { syncId, syncToken, syncEncKey, syncKeyRaw };
+}
+
+function storeSyncCreds(vaultId, syncId, syncToken, syncKeyRaw) {
+  localStorage.setItem(`sv_sync_id_${vaultId}`,  syncId);
+  localStorage.setItem(`sv_sync_tok_${vaultId}`, syncToken);
+  localStorage.setItem(`sv_sync_key_${vaultId}`, toB64(syncKeyRaw));
+}
+
+async function loadSyncKey() {
+  if (!_vaultId) return;
+  const raw = localStorage.getItem(`sv_sync_key_${_vaultId}`);
+  if (!raw) { _syncKey = null; return; }
+  try {
+    _syncKey = await crypto.subtle.importKey('raw', fromB64(raw), { name:'AES-GCM', length:256 }, false, ['encrypt','decrypt']);
+  } catch { _syncKey = null; }
+}
+
+function syncGetCreds() {
+  if (!_vaultId || !_syncKey) return null;
+  const syncUrl   = localStorage.getItem(SYNC_URL_KEY);
+  const syncId    = localStorage.getItem(`sv_sync_id_${_vaultId}`);
+  const syncToken = localStorage.getItem(`sv_sync_tok_${_vaultId}`);
+  if (!syncUrl || !syncId || !syncToken) return null;
+  return { syncUrl, syncId, syncToken };
+}
+
+function scheduleSyncPush() {
+  if (!_syncKey || !_vaultId) return;
+  clearTimeout(_syncPushTimer);
+  _syncPushTimer = setTimeout(syncPush, 3000);
+}
+
+async function syncPush() {
+  const creds = syncGetCreds();
+  if (!creds) return;
+  const { syncUrl, syncId, syncToken } = creds;
+  try {
+    updateSyncStatus('Syncing…');
+    const ts   = Date.now();
+    const data = await encrypt({ entries: _entries, ts }, _syncKey);
+    const resp = await fetch(`${syncUrl}/sync/${syncId}`, {
+      method:  'PUT',
+      headers: { 'Authorization': `Bearer ${syncToken}`, 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ ts, data })
+    });
+    const result = await resp.json();
+    if (result.ok) {
+      updateSyncStatus('Synced ✓');
+    } else if (result.error === 'stale') {
+      updateSyncStatus('Pulling changes…');
+      await syncPull();
+      scheduleSyncPush(); // push merged result
+    } else {
+      updateSyncStatus('Sync error', true);
+    }
+  } catch { updateSyncStatus('Sync offline', true); }
+}
+
+async function syncPull() {
+  const creds = syncGetCreds();
+  if (!creds) return;
+  const { syncUrl, syncId, syncToken } = creds;
+  try {
+    const resp = await fetch(`${syncUrl}/sync/${syncId}`, {
+      headers: { 'Authorization': `Bearer ${syncToken}` }
+    });
+    if (resp.status === 404) return; // nothing pushed yet
+    if (!resp.ok) { updateSyncStatus('Sync error', true); return; }
+    const { data } = await resp.json();
+    const remote = await decrypt(data, _syncKey);
+    const merged = mergeEntries(_entries, remote.entries || []);
+    // Only save+render if something changed
+    if (JSON.stringify(merged) !== JSON.stringify(_entries)) {
+      _entries = merged;
+      _syncPulling = true;
+      try { await saveVault(); } finally { _syncPulling = false; }
+      renderEntries();
+      updateSyncStatus('Synced ✓');
+    }
+  } catch { /* silent — offline or not yet paired */ }
+}
+
+/* Last-write-wins merge. Tombstones are kept so deletes propagate. */
+function mergeEntries(local, remote) {
+  const map = new Map();
+  for (const e of [...local, ...remote]) {
+    const existing = map.get(e.id);
+    const et = e.updated ?? e.created ?? 0;
+    const xt = existing ? (existing.updated ?? existing.created ?? 0) : -1;
+    if (et > xt) map.set(e.id, e);
+  }
+  return [...map.values()];
+}
+
+let _syncStatusTimer;
+function updateSyncStatus(msg, isError) {
+  const el = document.getElementById('sync-status');
+  if (!el) return;
+  clearTimeout(_syncStatusTimer);
+  if (!msg) { el.style.display = 'none'; el.textContent = ''; return; }
+  el.style.display = 'block';
+  el.textContent   = msg;
+  el.style.color   = isError ? 'var(--red)' : 'var(--ink4)';
+  _syncStatusTimer = setTimeout(() => { if (el.textContent === msg) updateSyncStatus(''); }, 5000);
+}
+
+function saveSyncUrl() {
+  const url = document.getElementById('sync-url-input').value.trim();
+  if (!url) {
+    localStorage.removeItem(SYNC_URL_KEY);
+    closeModal('settings-modal');
+    toast('Sync disabled');
+    return;
+  }
+  if (!url.startsWith('https://')) { toast('URL must start with https://', true); return; }
+  localStorage.setItem(SYNC_URL_KEY, url);
+  closeModal('settings-modal');
+  toast('Sync URL saved ✓');
+  if (_key) syncPull();
 }
 
 /* ══════════════════════════════════════════════
@@ -1429,6 +1626,7 @@ function backToLock() {
           _entries = (await decrypt(slot.data, _key)).entries || [];
           show('screen-app');
           renderEntries();
+          await loadSyncKey(); syncPull();
           return;
         }
       } catch {
