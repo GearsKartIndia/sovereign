@@ -1160,11 +1160,20 @@ async function completeImport() {
       localStorage.setItem(SYNC_URL_KEY, _pendingImport.syncUrl);
     }
 
+    // Password already verified — go straight into the app, no second prompt
+    _key = myKey; _vaultId = vaultId; _vsalt = myVsalt;
+    _entries = plaintext.entries || [];
+
     document.getElementById('import-pw-input').value = '';
     closeModal('import-pw-modal');
     _pendingImport = null;
-    toast('Backup imported — unlock with your password');
-    lockApp();
+
+    show('screen-app');
+    renderEntries();
+    toast('Vault imported ✓');
+    try { await cacheKeyInSession(_key); } catch {}
+    await loadSyncKey(); syncPull();
+    completePendingPairSend();
   } catch { toast('Wrong password for this backup', true); }
 }
 
