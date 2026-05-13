@@ -970,7 +970,7 @@ function renderEntries() {
     const preview    = isMulti ? '(multi-line)' : '••••••••';
     return `
     <div class="entry-card${isOpen?' open':''}" data-id="${e.id}">
-      <div class="entry-header" onclick="toggleEntry('${e.id}')">
+      <div class="entry-header" data-action="toggle">
         <span class="entry-name">${esc(e.name)}</span>
         ${isMulti ? '<span class="entry-badge">multi-line</span>' : ''}
         <span class="entry-chevron">▼</span>
@@ -978,19 +978,33 @@ function renderEntries() {
       <div class="entry-body">
         <div class="entry-value-wrap">
           <div class="entry-value${isRevealed?'':' masked'}">${esc(e.value)}</div>
-          <button class="entry-reveal" onclick="toggleReveal('${e.id}')" title="${isRevealed?'Hide':'Reveal'}">
+          <button class="entry-reveal" data-action="reveal" title="${isRevealed?'Hide':'Reveal'}">
             ${isRevealed ? '🙈' : '👁'}
           </button>
         </div>
         <div class="entry-actions">
-          <button class="btn btn-ghost btn-sm" onclick="copyEntry('${e.id}')">📋 Copy</button>
-          <button class="btn btn-ghost btn-sm" onclick="editEntry('${e.id}')">✏️ Edit</button>
-          <button class="btn btn-ghost btn-sm btn-danger" onclick="deleteEntry('${e.id}')">Delete</button>
+          <button class="btn btn-ghost btn-sm" data-action="copy">📋 Copy</button>
+          <button class="btn btn-ghost btn-sm" data-action="edit">✏️ Edit</button>
+          <button class="btn btn-ghost btn-sm btn-danger" data-action="delete">Delete</button>
         </div>
       </div>
     </div>`;
   }).join('');
 }
+
+document.getElementById('entry-list').addEventListener('click', e => {
+  const el   = e.target.closest('[data-action]');
+  if (!el) return;
+  const card = el.closest('[data-id]');
+  if (!card) return;
+  const id   = card.dataset.id;
+  const action = el.dataset.action;
+  if (action === 'toggle') toggleEntry(id);
+  else if (action === 'reveal') toggleReveal(id);
+  else if (action === 'copy')   copyEntry(id);
+  else if (action === 'edit')   editEntry(id);
+  else if (action === 'delete') deleteEntry(id);
+});
 
 function toggleEntry(id) {
   const card = document.querySelector(`.entry-card[data-id="${id}"]`);
@@ -1156,7 +1170,7 @@ async function completeImport() {
       storeSyncCreds(vaultId, _pendingSync.syncId, _pendingSync.syncToken, _pendingSync.syncKeyRaw);
       _pendingSync = null;
     }
-    if (_pendingImport.syncUrl) {
+    if (_pendingImport.syncUrl && _pendingImport.syncUrl.startsWith('https://')) {
       localStorage.setItem(SYNC_URL_KEY, _pendingImport.syncUrl);
     }
 
